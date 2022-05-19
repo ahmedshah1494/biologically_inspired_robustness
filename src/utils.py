@@ -1,9 +1,18 @@
 import json
 import pickle
 import numpy as np
+import os
 
 import torch
 
+def aggregate_metrics(logdir, metrics_filename='metrics.json'):
+    metric_dicts = []
+    for root, dirs, files in os.walk(logdir):
+        if metrics_filename in files:
+            m = load_json(os.path.join(root, metrics_filename))
+            metric_dicts.append(m)
+    agg_metrics = aggregate_dicts(metric_dicts)
+    return agg_metrics
 
 def aggregate_dicts(inp):
     if isinstance(inp, list) and all([isinstance(x, dict) for x in inp]):

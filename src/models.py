@@ -26,7 +26,7 @@ class ConsistencyOptimizationParams:
     lateral_dependence_type: str ='Linear'
     act_opt_step_size: float = 0.07
     max_act_update_norm: float = 10.
-    normalize_lateral_dependence: bool = False,
+    normalize_lateral_dependence: bool = False
     input_act_consistency: bool = False
     act_act_consistency: bool = True
     backward_dependence_type:str = 'Linear'
@@ -181,7 +181,7 @@ class ConsistencyOptimizationMixin(object):
         state = act - self.act_opt_step_size * act_update_m
         sparsity_update = self._get_sparsity_update(state)
         state = state - self.act_opt_step_size * sparsity_update
-        print(step_idx, 'loss =', loss.detach().cpu().numpy().mean(), f'max update norm = {act_update_norm.max():.3e} (/{scale.min():.3f})', act_update_m.shape, scale.shape, (state>0).float().mean().cpu().detach().numpy())
+        # print(step_idx, 'loss =', loss.detach().cpu().numpy().mean(), f'max update norm = {act_update_norm.max():.3e} (/{scale.min():.3f})', act_update_m.shape, scale.shape, (state>0).float().mean().cpu().detach().numpy())
         return state, loss, act_update_m
 
     def _optimize_activations(self, state_hist, x, W_lat, b_lat, W_back, b_back):
