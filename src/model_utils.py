@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 
 def mm(mat_a, mat_b):
@@ -38,3 +39,35 @@ def _make_last_dim_first(x):
     for i in range(x.dim()-1, 0, -1):
         x = x.transpose(i,i-1)
     return x
+
+def _compute_conv_output_shape(input_dim, kernel_size, stride, padding, dilation):
+    to_array = lambda x: np.array([x]*2)
+    conv_args = [kernel_size, stride, padding, dilation]
+    for i,x in enumerate(conv_args):
+        if isinstance(x, int):
+            conv_args[i] = to_array(x)
+    [kernel_size, stride, padding, dilation] = conv_args
+    output_dim = 1 + (input_dim + 2*padding - dilation*(kernel_size - 1) -1)/stride
+    output_dim = np.floor(output_dim).astype(int)
+    return output_dim
+
+def get_common_prefix(strings):
+    min_len = min([len(s) for s in strings])
+    i = 1
+    while (i <= min_len) and all([s[:i] == strings[0][:i] for s in strings]):
+        i += 1
+    return strings[0][:i-1]
+
+def get_common_suffix(strings):
+    rev_strings = [s[::-1] for s in strings]
+    rev_suffix = get_common_prefix(rev_strings)
+    return rev_suffix[::-1]
+
+def merge_strings(strings):
+    prefix = get_common_prefix(strings)
+    suffix = get_common_suffix([s.replace(prefix, '') for s in strings])
+    if suffix == '':
+        return prefix
+    ucss = [s[len(prefix):-len(suffix)] for s in strings]    
+    new_string = prefix + f"({'-'.join(ucss)})" + suffix
+    return new_string
