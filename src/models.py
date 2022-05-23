@@ -1,3 +1,4 @@
+import time
 import traceback
 from typing import Iterable, List, Type, Union
 from attr import define
@@ -5,10 +6,10 @@ from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
 import numpy as np
 
-from torch import nn
+from torch import dropout, nn
 import torch
 
-from model_utils import mm, str_to_act_and_dact_fn
+from model_utils import _make_first_dim_last, _make_last_dim_first, merge_strings, mm, str_to_act_and_dact_fn, _compute_conv_output_shape
 
 @define(slots=False)
 class CommonModelParams:
@@ -16,6 +17,7 @@ class CommonModelParams:
     num_units: Union[int, List[int]] = 0
     activation: Type[nn.Module] = nn.ReLU
     bias: bool = True
+    dropout_p: float = 0.
 
 @define(slots=False)
 class ClassificationModelParams:
@@ -40,6 +42,16 @@ class ConsistencyOptimizationParams:
     sparsity_coeff: float = 1.
 
 class CommonModelMixin(object):
+    def add_common_params_to_name(self):
+        activation_str = self.activation.__str__()
+        self.name +=f'-{activation_str[:activation_str.index("(")]}'
+
+        if not self.use_bias:
+            self.name += '-noBias'
+
+        if self.sparsify_act:
+            self.name += f'-{self.sparsity_coeff:.3f}Sparse'
+
     def load_common_params(self) -> None:
         input_size = self.params.common_params.input_size
         num_units = self.params.common_params.num_units
@@ -56,8 +68,31 @@ class ClassificationModelMixin(object):
         self.num_classes = self.params.classification_params.num_classes
         self.num_logits = (1 if self.num_classes == 2 else self.num_classes)
 
+@define(slots=False)
+class ScanningConsistencyOptimizationParams:
+    kernel_size: int = 0
+    stride: int = 0
+    padding: int = 0
+    act_opt_kernel_size: int = 0
+    act_opt_stride: int = 0
+    window_input_act_consistency: bool = True
+    spatial_act_act_consistency: bool = False
+
 
 class ConsistencyOptimizationMixin(object):
+    def add_consistency_opt_params_to_name(self):
+        ld_type = ('Normalized' if self.normalize_lateral_dependence else '')+self.lateral_dependence_type
+        _inc_input_str = f'{self.backward_dependence_type}BackDep' if self.input_act_consistency else ''
+        self.name = f'Max{ld_type}LatDep{_inc_input_str}{self.name}-{self.num_units}-{self.max_train_time_steps}-{self.max_test_time_steps}steps'
+
+        if self.no_act_after_update:
+            self.name += '-noActAfterUpdate'
+
+        if self.truncate_act_opt_grad:
+            self.name += '-TruncActOpt'
+        if self.use_pt_optimizer:
+            self.name += '-PTOptimActOpt'
+
     def load_consistency_opt_params(self) -> None:
         lateral_dependence_type = self.params.consistency_optimization_params.lateral_dependence_type
         act_opt_step_size = self.params.consistency_optimization_params.act_opt_step_size
@@ -148,6 +183,7 @@ class ConsistencyOptimizationMixin(object):
             return 0
             
     def _optimization_step(self, step_idx, state, x, W_lat, b_lat, W_back, b_back):
+        t0 = time.time()
         if (step_idx == 0) or (not self.no_act_after_update):
             act = self.activation(state)
         else:
@@ -181,7 +217,7 @@ class ConsistencyOptimizationMixin(object):
         state = act - self.act_opt_step_size * act_update_m
         sparsity_update = self._get_sparsity_update(state)
         state = state - self.act_opt_step_size * sparsity_update
-        # print(step_idx, 'loss =', loss.detach().cpu().numpy().mean(), f'max update norm = {act_update_norm.max():.3e} (/{scale.min():.3f})', act_update_m.shape, scale.shape, (state>0).float().mean().cpu().detach().numpy())
+        # print(step_idx, 'loss =', loss.detach().cpu().numpy().mean(), f'max update norm = {act_update_norm.max():.3e} (/{scale.min():.3f})', act_update_m.shape, scale.shape, (state>0).float().mean().cpu().detach().numpy(), time.time() - t0)
         return state, loss, act_update_m
 
     def _optimize_activations(self, state_hist, x, W_lat, b_lat, W_back, b_back):
@@ -214,40 +250,23 @@ class ConsistencyOptimizationMixin(object):
     
 class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOptimizationMixin):
     class ModelParams(BaseParameters):
-        common_params: CommonModelParams = CommonModelParams()
-        classification_params: ClassificationModelParams = ClassificationModelParams()
-        consistency_optimization_params: ConsistencyOptimizationParams = ConsistencyOptimizationParams()        
+        def __init__(self, cls):
+            super().__init__(cls)
+            self.common_params: CommonModelParams = CommonModelParams()
+            self.consistency_optimization_params: ConsistencyOptimizationParams = ConsistencyOptimizationParams()        
 
     def __init__(self, params: ModelParams) -> None:
         print('in ConsistentActivationLayer')
         super().__init__(params)
         self.load_common_params()
+        self.input_size = np.prod(self.input_size) if np.iterable(self.input_size) else self.input_size
         self.load_consistency_opt_params()
         self._make_network()
         self._make_name()
 
     def _make_name(self):
-        self.name = f'FC-{self.num_units}-{self.max_train_time_steps}-{self.max_test_time_steps}steps'
-        activation_str = self.activation.__str__()
-        self.name +=f'-{activation_str[:activation_str.index("(")]}'
-
-        if not self.use_bias:
-            self.name += '-noBias'
-
-        if self.sparsify_act:
-            self.name += f'-{self.sparsity_coeff:.3f}Sparse'
-
-        ld_type = ('Normalized' if self.normalize_lateral_dependence else '')+self.lateral_dependence_type
-        _inc_input_str = f'{self.backward_dependence_type}BackDep' if self.input_act_consistency else ''
-        self.name = f'Max{ld_type}LatDep{_inc_input_str}{self.name}-E2E'
-
-        if self.no_act_after_update:
-            self.name += '-noActAfterUpdate'
-
-        if self.truncate_act_opt_grad:
-            self.name += '-TruncActOpt'
-        if self.use_pt_optimizer:
-            self.name += '-PTOptimActOpt'
+        self.add_common_params_to_name()
+        self.add_consistency_opt_params_to_name()
 
     def _make_network(self):
         state_size = self.num_units + self.input_size
@@ -299,7 +318,9 @@ class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOpti
 
 class ConsistentActivationClassifier(ConsistentActivationLayer, ClassificationModelMixin):
     class ModelParams(ConsistentActivationLayer.ModelParams):
-        classification_params: ClassificationModelParams = ClassificationModelParams()   
+        def __init__(self, cls):
+            super().__init__(cls)
+            self.classification_params: ClassificationModelParams = ClassificationModelParams()   
 
     def __init__(self, params: ModelParams) -> None:
         print('in ConsistentActivationClassifier')
@@ -327,4 +348,390 @@ class ConsistentActivationClassifier(ConsistentActivationLayer, ClassificationMo
             return logits, loss
         else:
             return loss
-        
+
+class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOptimizationMixin):
+    class ModelParams(BaseParameters):
+        def __init__(self, cls):
+            super().__init__(cls)
+            self.common_params: CommonModelParams = CommonModelParams()
+            self.consistency_optimization_params: ConsistencyOptimizationParams = ConsistencyOptimizationParams()
+            self.scanning_consistency_optimization_params: ScanningConsistencyOptimizationParams = ScanningConsistencyOptimizationParams()
+
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.load_common_params()
+        self.load_consistency_opt_params()
+        self.load_scanning_consistency_optimization_params()
+
+        self._make_network()
+        self._make_name()
+
+    def load_scanning_consistency_optimization_params(self):
+        kernel_size: int = self.params.scanning_consistency_optimization_params.kernel_size
+        stride: int = self.params.scanning_consistency_optimization_params.stride
+        padding: int = self.params.scanning_consistency_optimization_params.padding
+        act_opt_kernel_size: int = self.params.scanning_consistency_optimization_params.act_opt_kernel_size
+        act_opt_stride: int = self.params.scanning_consistency_optimization_params.act_opt_stride
+        window_input_act_consistency: bool = self.params.scanning_consistency_optimization_params.window_input_act_consistency
+        spatial_act_act_consistency: bool = self.params.scanning_consistency_optimization_params.spatial_act_act_consistency
+
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.act_opt_kernel_size = act_opt_kernel_size
+        self.act_opt_stride = act_opt_stride
+        self.window_input_act_consistency = window_input_act_consistency
+        self.spatial_act_act_consistency = spatial_act_act_consistency
+
+        self.actual_input_size = self.input_size
+        self.input_size = self.input_size[0] * (self.kernel_size ** 2)
+        self.output_spatial_dims = _compute_conv_output_shape(self.actual_input_size[1:], kernel_size, stride, padding, 1)
+    
+    def _make_name(self):
+        self.add_consistency_opt_params_to_name()
+        self.add_common_params_to_name()
+        if self.window_input_act_consistency and self.input_act_consistency:
+            self.name += '-windowedBack'
+        if self.spatial_act_act_consistency:
+            self.name = f'Scanning{self.kernel_size}_{self.stride}_{self.padding}-{self.name}'
+        else:
+            self.name = f'Scanning{self.kernel_size}|{self.act_opt_kernel_size}_{self.stride}|{self.act_opt_stride}_{self.padding}-{self.name}'
+    
+    def _make_network(self):
+        if self.spatial_act_act_consistency:
+            output_area = np.prod(self.output_spatial_dims)
+            self.lat_layer = nn.Linear(output_area, self.num_units*output_area, bias=self.use_bias)
+            self.back_layer = nn.Linear(self.num_units*output_area, np.prod(self.actual_input_size))
+        else:
+            lat_kernel_volume = self.num_units*(self.act_opt_kernel_size ** 2)
+            self.lat_layer = nn.Linear(lat_kernel_volume, lat_kernel_volume, bias=self.use_bias)
+            if self.input_act_consistency:
+                if self.window_input_act_consistency:
+                    inp_kernel_volume =  self.actual_input_size[0]*((self.kernel_size + (self.act_opt_kernel_size-1)*self.stride)**2)
+                    self.back_layer = nn.Linear(lat_kernel_volume, inp_kernel_volume)
+                else:
+                    inp_kernel_volume = self.actual_input_size[0]*(self.kernel_size ** 2)
+                    self.back_layer = nn.Linear(self.num_units, inp_kernel_volume)
+
+        self.fwd_layer = nn.Conv2d(self.actual_input_size[0], self.num_units, self.kernel_size, self.stride, 
+                                            self.padding, bias=self.use_bias)
+        self.activation = self.params.common_params.activation()
+        self._maybe_create_overlap_count_map()
+    
+    def _get_num_padding(self, n, k, s):
+        p = ((k - ((n - k) % s)) % k) // 2
+        return p
+
+    def _maybe_create_overlap_count_map(self):
+        x = torch.rand(1,*self.actual_input_size)
+        fwd = self.fwd_layer(x)
+        bs, c, h, w = fwd.shape
+        if self.act_opt_kernel_size > self.act_opt_stride:
+            overlap = nn.functional.fold(
+                nn.functional.unfold(
+                                        torch.ones(fwd.shape), self.act_opt_kernel_size, 
+                                        stride=self.act_opt_stride, 
+                                        padding=self._get_num_padding(h, self.act_opt_kernel_size, self.act_opt_stride)
+                                    ),
+                (h, w), self.act_opt_kernel_size, stride=self.act_opt_stride, padding=self._get_num_padding(h, self.act_opt_kernel_size, self.act_opt_stride)
+            )
+            self.overlap = nn.Parameter(overlap, False)
+        else:
+            self.overlap = None
+
+    def _unfold_for_act_opt(self, y):
+        c, h, w, bs = y.shape
+        y = _make_last_dim_first(y)        
+        y_unf = nn.functional.unfold(y, self.act_opt_kernel_size, stride=self.act_opt_stride,
+                                        padding=self._get_num_padding(h, self.act_opt_kernel_size, self.act_opt_stride))
+        return y_unf
+
+    def _fold_for_act_opt(self, y, y_orig_shape):
+        c, h, w, bs = y_orig_shape
+        block_dim, bs_x_nblocks = y.shape
+        y_unf = y.reshape(block_dim, bs, -1)
+        y_unf = y_unf.transpose(1,0)
+        y_fld = nn.functional.fold(y_unf, (h, w), self.act_opt_kernel_size, stride=self.act_opt_stride,
+                                    padding=self._get_num_padding(h, self.act_opt_kernel_size, self.act_opt_stride))
+        return y_fld
+
+    def _reshape_input_for_act_act_consistency_optimization(self, y):
+        if self.spatial_act_act_consistency:
+            return y
+
+        if y.dim() == 4:
+            y_unf = self._unfold_for_act_opt(y)
+            bs, block_dim, num_blocks = y_unf.shape
+            y_unf = y_unf.transpose(0,1)
+            y_unf = y_unf.reshape(block_dim, -1)
+        else:
+            block_dim, num_blocks, bs = y.shape
+            y = y.transpose(1,2)
+            y_unf = y.reshape(block_dim, -1)
+        return y_unf
+
+    def _reshape_output_for_act_act_consistency_optimization(self, y, y_orig_shape):
+        if self.spatial_act_act_consistency:
+            return y
+        if (not self.input_act_consistency) or self.window_input_act_consistency:
+            block_dim, num_blocks, bs = y_orig_shape
+            y = y.reshape(block_dim, bs, num_blocks)
+            y = y.transpose(1,2)
+            return y
+        y_fld = self._fold_for_act_opt(y, y_orig_shape)
+        if self.overlap is not None:
+            y_fld = y_fld / self.overlap
+        y_fld = _make_first_dim_last(y_fld)
+        return y_fld
+
+    def _get_activation_update_manual(self, act: torch.Tensor, W: torch.Tensor, b: torch.Tensor, normalize_by_act_norm=False):
+        act_shape = act.shape
+        act = self._reshape_input_for_act_act_consistency_optimization(act)
+        act_update, loss = super()._get_activation_update_manual(act, W, b, normalize_by_act_norm)
+        act_update = self._reshape_output_for_act_act_consistency_optimization(act_update, act_shape)
+        return act_update, loss
+
+    def _reshape_input_for_input_act_consistency_optimization(self, y):
+        if self.spatial_act_act_consistency:
+            c, h_w, bs = y.shape
+            y = y.reshape(-1, bs)
+        else:
+            if self.window_input_act_consistency:
+                block_dim, num_blocks, bs = y.shape
+                y = y.reshape(block_dim, -1)
+            else:
+                c, h, w, bs = y.shape
+                y = y.reshape(c, -1)
+        return y
+    
+    def _reshape_output_for_input_act_consistency_optimization(self, y, y_orig_shape):
+        if self.spatial_act_act_consistency or self.window_input_act_consistency:
+            y = y.reshape(*y_orig_shape)
+        else:
+            c, h, w, bs = y_orig_shape
+            c, h_w_bs = y.shape
+            y = y.reshape(c, h, w, bs)
+        return y
+
+    def _get_activation_backward_update_manual(self, x: torch.Tensor, act: torch.Tensor, W: torch.Tensor, b: torch.Tensor, normalize_by_act_norm=False):
+        act_shape = act.shape
+        act = self._reshape_input_for_input_act_consistency_optimization(act)
+        act_update, loss = super()._get_activation_backward_update_manual(x, act, W, b, normalize_by_act_norm)
+        act_update = self._reshape_output_for_input_act_consistency_optimization(act_update, act_shape)
+        return act_update, loss
+    
+    def _scan_with_model(self, x, scanning_fn):
+        output_shape = _compute_conv_output_shape(x.shape[-2:], self.kernel_size, self.stride, self.padding, 1)
+        x_unf = torch.nn.functional.unfold(x, kernel_size=self.kernel_size, stride=self.stride, padding=self.padding)
+        # print(x_unf.shape)
+        bs, block_dim, nblocks = x_unf.shape
+        def _fold(y_unf):
+            # print(y_unf.shape)
+            y_unf = y_unf.reshape(bs, nblocks, self.num_units)
+            # print(y_unf.shape)
+            y_unf = y_unf.transpose(1,2)
+            # print(y_unf.shape)
+            y_unf = y_unf.reshape(*(y_unf.shape[:-1]), *(tuple(output_shape)))
+            # print(y_unf.shape)
+            return y_unf
+
+        x_unf = x_unf.transpose(1,2)
+        # print(x_unf.shape)
+        x_unf = x_unf.reshape(-1, block_dim)
+        # print(x_unf.shape)
+        outputs_unf = scanning_fn(x_unf)
+        # print(outputs_unf.shape)
+        outputs = _fold(outputs_unf)
+        return outputs
+
+    def _optimize_activations(self, state_hist, x, W_lat, b_lat, W_back, b_back):
+        fwd = state_hist[-1]
+        bs, c, h, w = fwd.shape
+        if self.spatial_act_act_consistency:
+            fwd = fwd.reshape(fwd.shape[0], fwd.shape[1], -1)
+            fwd = fwd.transpose(0,1).transpose(1,2)
+            x = x.reshape(x.shape[0], -1).T
+            W_lat = W_lat.reshape(self.num_units, -1, W_lat.shape[1])
+            b_lat = b_lat.reshape(self.num_units, -1, 1)
+            state_hist[-1] = fwd
+        else:
+            state_hist[-1] = _make_first_dim_last(fwd)
+            if self.input_act_consistency:
+                x_unf = nn.functional.unfold(x, self.kernel_size, stride=self.stride, padding=self.padding)
+                if self.window_input_act_consistency:
+                    k = self.kernel_size + (self.act_opt_kernel_size-1)*self.stride
+                    s = self.stride * self.act_opt_stride
+                    h = int(np.floor((x.shape[1] + 2*self.padding - (self.kernel_size-1) - 1)/self.stride + 1))
+                    p = self._get_num_padding(h, self.act_opt_kernel_size, self.act_opt_stride)
+                    x_unf = nn.functional.unfold(x, k, stride=s, padding=self.padding+p)
+                    state_hist[-1] = _make_first_dim_last(self._unfold_for_act_opt(state_hist[-1]))
+                bs, block_dim, num_blocks = x_unf.shape
+                # x_unf = x_unf.transpose(0,1)
+                x_unf = _make_first_dim_last(x_unf)
+                x = x_unf.reshape(block_dim, -1)
+            else:
+                state_hist[-1] = _make_first_dim_last(self._unfold_for_act_opt(state_hist[-1]))
+        super()._optimize_activations(state_hist, x, W_lat, b_lat, W_back, b_back)
+
+    def forward(self, x, return_state_hist=False):
+        if x.dim() == 3:
+            x = x.unsqueeze(1)
+        fwd = self.fwd_layer(x)
+        W_lat = self.lat_layer.weight
+        b_lat = self.lat_layer.bias.reshape(-1,1)
+        state_hist = [fwd]
+        W_back = self.back_layer.weight if self.input_act_consistency else None
+        b_back = self.back_layer.bias.reshape(-1, 1) if self.input_act_consistency else None
+        self._optimize_activations(state_hist, x, W_lat, b_lat, W_back, b_back)
+        def reshape_state(s):
+            if self.input_act_consistency and (not self.window_input_act_consistency):
+                s = _make_last_dim_first(s)
+            else:
+                s = s.transpose(1,2).reshape(s.shape[0], -1)
+                s = self._fold_for_act_opt(s, _make_first_dim_last(fwd).shape)
+                s = s.reshape(s.shape[0], s.shape[1], *(self.output_spatial_dims))
+            return s
+        logits = reshape_state(state_hist[-1])
+        if return_state_hist:
+            state_hist = [reshape_state(s) for s in state_hist]
+            state_hist = torch.stack(state_hist, dim=1)
+            return logits, state_hist
+        else:
+            return logits
+    
+    def compute_loss(self, x, y, return_state_hist=False, return_logits=False):
+        logits, state_hist = self.forward(x, return_state_hist=True)
+        loss = torch.tensor(0., device=x.device)
+        output = (loss,)
+        if return_state_hist:
+            output = output + (state_hist,)
+        if return_logits:
+            output = (logits,) + output
+        return output
+
+class SequentialLayers(AbstractModel, CommonModelMixin):
+    class ModelParams(BaseParameters):
+        def __init__(self, cls):
+            super().__init__(cls)
+            self.layer_params: List[BaseParameters] = []
+            self.common_params: CommonModelParams = CommonModelParams()
+    
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.params = params
+        self.load_common_params()
+        self._make_network()
+        self._make_name()
+    
+    def _make_name(self):
+        self.name = merge_strings([l.name for l in self.layers])
+        self.name += f'-{self.params.common_params.dropout_p}Dropout'
+    
+    def _make_network(self):
+        self.activation = self.params.common_params.activation()
+        self.dropout = nn.Dropout(self.params.common_params.dropout_p)
+
+        x = torch.rand(1,*(self.params.common_params.input_size))
+        layers = []
+        print(x.shape)
+        for lp in self.params.layer_params:
+            lp.common_params.input_size = x.shape[1:]
+            l = lp.cls(lp)
+            x = l(x)
+            print(x.shape)
+            layers.append(l)
+        self.layers = nn.ModuleList(layers)
+    
+    def forward(self, x, *fwd_args, **fwd_kwargs):
+        out = x
+        extra_outputs = []
+        for l in self.layers:
+            if self.training:
+                out = l.compute_loss(out, None, return_logits=True)
+            else:
+                out = l(out, *fwd_args, **fwd_kwargs)
+            if isinstance(out, tuple):
+                extra_outputs.append(out[1:])
+                out = out[0]
+            out = self.activation(out)
+            out = self.dropout(out)
+        if len(extra_outputs) > 0:
+            return out, extra_outputs
+        else:
+            return out
+
+class GeneralClassifier(AbstractModel):
+    class ModelParams(BaseParameters):
+        feature_model_params: BaseParameters
+        classifier_params: BaseParameters
+    
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self._make_network()
+        self._make_name()
+    
+    def _make_name(self):
+        self.name = self.feature_model.name
+    
+    def _make_network(self):
+        fe_params = self.params.feature_model_params
+        self.feature_model = fe_params.cls(fe_params)
+
+        x = torch.rand(1,*(fe_params.common_params.input_size))
+        x = self.feature_model(x)
+        if isinstance(x, tuple):
+            x = x[0]
+
+        cls_params = self.params.classifier_params
+        cls_params.common_params.input_size = x.shape[1:]
+        self.classifier = cls_params.cls(cls_params)
+    
+    def forward(self, x, *fwd_args, **fwd_kwargs):
+        y = self.feature_model.forward(x, *fwd_args, **fwd_kwargs)
+        extra_outputs = []
+        if isinstance(y, tuple):
+            r = y[0]
+            conv_extra_outputs = y[1]
+            extra_outputs.extend(conv_extra_outputs)
+        else:
+            r = y
+            conv_extra_outputs = ()
+        if np.random.uniform(0, 1) < 1/100:
+            _r = r.detach().cpu().numpy()
+            print(f'sparsity={(_r == 0).astype(float).mean():3f}', _r.max(), np.quantile(_r, 0.99))
+        out = self.classifier(r, *fwd_args, **fwd_kwargs)
+        if isinstance(out, tuple):
+            logits = out[0]
+            cls_extra_outputs = out[1:]
+            extra_outputs.append(cls_extra_outputs)
+        else:
+            logits = out
+            cls_extra_outputs = ()
+        if len(cls_extra_outputs) == 0 and len(conv_extra_outputs) == 0:
+            return logits
+        extra_outputs = list(zip(*extra_outputs))
+        return (logits, *extra_outputs)
+
+    def compute_loss(self, x, y, *fwd_args, return_logits=True, **fwd_kwargs):
+        out = self.forward(x, *fwd_args, **fwd_kwargs)
+        if isinstance(out, tuple):
+            logits = out[0]
+            extra_outputs = out[1:]
+        else:
+            logits = out
+            extra_outputs = ()
+        if self.params.classifier_params.classification_params.num_classes == 2:
+            loss = nn.functional.binary_cross_entropy_with_logits(logits, y)
+        else:
+            loss = nn.functional.cross_entropy(logits, y)
+        if len(extra_outputs) > 0:
+            loss = loss + torch.stack(extra_outputs[0], 0).sum(0)
+            extra_outputs = extra_outputs[1:]
+            assert loss.dim() == 0
+        outputs = []
+        if return_logits:
+            outputs.append(logits)
+        outputs.append(loss)
+        if len(extra_outputs) > 0:
+            outputs.extend(extra_outputs)
+        return tuple(outputs)
