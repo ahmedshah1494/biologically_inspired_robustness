@@ -77,6 +77,7 @@ class ScanningConsistencyOptimizationParams:
     act_opt_stride: int = 0
     window_input_act_consistency: bool = True
     spatial_act_act_consistency: bool = False
+    use_forward: bool = True
 
 
 class ConsistencyOptimizationMixin(object):
@@ -271,12 +272,16 @@ class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOpti
     def _make_network(self):
         state_size = self.num_units + self.input_size
         self.activation = self.activation()
-        self.weight = nn.Parameter(torch.empty((self.num_units, state_size)), True)
-        self.bias = nn.Parameter(torch.empty((self.num_units,)).zero_(), self.use_bias)
+        # self.weight = nn.Parameter(torch.empty((self.num_units, state_size)), True)
+        # self.bias = nn.Parameter(torch.empty((self.num_units,)).zero_(), self.use_bias)
+        # if self.input_act_consistency:
+        #     self.weight_back = nn.Parameter(torch.empty((self.input_size, self.num_units)), True)
+        #     self.bias_back = nn.Parameter(torch.empty((self.input_size,)).zero_(), self.use_bias)
+        # self.reset_parameters()
+        self.fwd = nn.Linear(self.input_size, self.num_units, bias=self.use_bias)
+        self.lat = nn.Linear(self.num_units, self.num_units, bias=self.use_bias)
         if self.input_act_consistency:
-            self.weight_back = nn.Parameter(torch.empty((self.input_size, self.num_units)), True)
-            self.bias_back = nn.Parameter(torch.empty((self.input_size,)).zero_(), self.use_bias)
-        self.reset_parameters()
+            self.back = nn.Linear(self.num_units, self.input_size, bias=self.use_bias)
 
     def reset_parameters(self) -> None:
         nn.init.kaiming_uniform_(self.weight, a=np.sqrt(5))
@@ -297,15 +302,21 @@ class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOpti
 
     def forward(self, x, return_state_hist=False):
         x = x.reshape(x.shape[0], -1)
-        W = self.weight
-        W_ff = W[:, :self.input_size]
-        W_lat = W[:, self.input_size:]
-        b = self.bias.reshape(-1,1)
-        fwd = self._input_to_preact(x.T)
+        # W = self.weight
+        # W_ff = W[:, :self.input_size]
+        # W_lat = W[:, self.input_size:]
+        # b = self.bias
+        # fwd = self._input_to_preact(x.T)
+        fwd = self.fwd(x).T
+        W_lat = self.lat.weight
+        b = self.lat.bias
+        b = b.reshape(-1,1)
         state_hist = [fwd]
         # print(0, state_hist[-1][0])
         if self.input_act_consistency:
-            W_back, bias_back = self.weight_back, self.bias_back.reshape(-1, 1)
+            # W_back, bias_back = self.weight_back, self.bias_back.reshape(-1, 1)
+            W_back = self.back.weight
+            bias_back = self.back.bias.reshape(-1, 1)
         else:
             W_back, bias_back = None, None
         self._optimize_activations(state_hist, x.T, W_lat, b, W_back, bias_back)
@@ -374,14 +385,21 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
         act_opt_stride: int = self.params.scanning_consistency_optimization_params.act_opt_stride
         window_input_act_consistency: bool = self.params.scanning_consistency_optimization_params.window_input_act_consistency
         spatial_act_act_consistency: bool = self.params.scanning_consistency_optimization_params.spatial_act_act_consistency
-
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
+        use_forward: bool = self.params.scanning_consistency_optimization_params.use_forward
+        if use_forward:
+            self.kernel_size = kernel_size
+            self.stride = stride
+            self.padding = padding
+        else:
+            self.kernel_size = 1
+            self.stride = 1
+            self.padding = 0
+            self.num_units = self.input_size[0]
         self.act_opt_kernel_size = act_opt_kernel_size
         self.act_opt_stride = act_opt_stride
         self.window_input_act_consistency = window_input_act_consistency
         self.spatial_act_act_consistency = spatial_act_act_consistency
+        self.use_forward = use_forward
 
         self.actual_input_size = self.input_size
         self.input_size = self.input_size[0] * (self.kernel_size ** 2)
@@ -395,7 +413,10 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
         if self.spatial_act_act_consistency:
             self.name = f'Scanning{self.kernel_size}_{self.stride}_{self.padding}-{self.name}'
         else:
-            self.name = f'Scanning{self.kernel_size}|{self.act_opt_kernel_size}_{self.stride}|{self.act_opt_stride}_{self.padding}-{self.name}'
+            if not self.use_forward:
+                self.name = f'Scanning|{self.act_opt_kernel_size}_|{self.act_opt_stride}_-{self.name}'
+            else:
+                self.name = f'Scanning{self.kernel_size}|{self.act_opt_kernel_size}_{self.stride}|{self.act_opt_stride}_{self.padding}-{self.name}'
     
     def _make_network(self):
         if self.spatial_act_act_consistency:
@@ -412,9 +433,11 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
                 else:
                     inp_kernel_volume = self.actual_input_size[0]*(self.kernel_size ** 2)
                     self.back_layer = nn.Linear(self.num_units, inp_kernel_volume)
-
-        self.fwd_layer = nn.Conv2d(self.actual_input_size[0], self.num_units, self.kernel_size, self.stride, 
+        if self.use_forward:
+            self.fwd_layer = nn.Conv2d(self.actual_input_size[0], self.num_units, self.kernel_size, self.stride, 
                                             self.padding, bias=self.use_bias)
+        else:
+            self.fwd_layer = nn.Identity()
         self.activation = self.params.common_params.activation()
         self._maybe_create_overlap_count_map()
     
@@ -519,30 +542,6 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
         act_update, loss = super()._get_activation_backward_update_manual(x, act, W, b, normalize_by_act_norm)
         act_update = self._reshape_output_for_input_act_consistency_optimization(act_update, act_shape)
         return act_update, loss
-    
-    def _scan_with_model(self, x, scanning_fn):
-        output_shape = _compute_conv_output_shape(x.shape[-2:], self.kernel_size, self.stride, self.padding, 1)
-        x_unf = torch.nn.functional.unfold(x, kernel_size=self.kernel_size, stride=self.stride, padding=self.padding)
-        # print(x_unf.shape)
-        bs, block_dim, nblocks = x_unf.shape
-        def _fold(y_unf):
-            # print(y_unf.shape)
-            y_unf = y_unf.reshape(bs, nblocks, self.num_units)
-            # print(y_unf.shape)
-            y_unf = y_unf.transpose(1,2)
-            # print(y_unf.shape)
-            y_unf = y_unf.reshape(*(y_unf.shape[:-1]), *(tuple(output_shape)))
-            # print(y_unf.shape)
-            return y_unf
-
-        x_unf = x_unf.transpose(1,2)
-        # print(x_unf.shape)
-        x_unf = x_unf.reshape(-1, block_dim)
-        # print(x_unf.shape)
-        outputs_unf = scanning_fn(x_unf)
-        # print(outputs_unf.shape)
-        outputs = _fold(outputs_unf)
-        return outputs
 
     def _optimize_activations(self, state_hist, x, W_lat, b_lat, W_back, b_back):
         fwd = state_hist[-1]
