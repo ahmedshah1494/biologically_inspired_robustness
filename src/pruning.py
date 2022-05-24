@@ -7,25 +7,26 @@ import torch.nn.utils.prune as prune
 
 class PruningMixin:
     def iterative_pruning_wrapper(self: Trainer, fine_tune_epochs, prune_step_fn, *args, **kwargs):
+        def _get_train_acc():
+            with torch.no_grad():
+                _, metrics = self._batch_loop(self.train_step, self.train_loader, i, logging=False)
+            return metrics['train_accuracy']
         model = self.model
         orig_model = deepcopy(model)
         i = 0
-        _, metrics = self._batch_loop(self.train_step, self.train_loader, i, logging=False)
-        new_acc = old_acc = metrics['train_accuracy']
+        new_acc = old_acc = _get_train_acc()
         max_pruning_iters = sum([p.numel() for p in model.parameters()])
         tol = 0.01
         while (i == 0 or ((old_acc - new_acc < tol) and (i < max_pruning_iters))):
             old_sd = deepcopy(model.state_dict())
             prune_step_fn(*args, **kwargs)
             old_acc = new_acc
-            _, metrics = self._batch_loop(self.train_step, self.train_loader, i, logging=False)
-            new_acc = metrics['train_accuracy']
+            new_acc =_get_train_acc()
             
             j = 0
             while (old_acc - new_acc >= tol) and j < fine_tune_epochs:
                 self.train_loop(i, self.train_epoch_end)
-                _, metrics = self._batch_loop(self.train_step, self.train_loader, i, logging=False)
-                new_acc = metrics['train_accuracy']
+                new_acc = _get_train_acc()
                 j += 1
             i+=1
         if (old_acc - new_acc > 0.01):
