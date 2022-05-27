@@ -72,3 +72,69 @@ def write_json(d, path):
 def write_pickle(d, path):
     with open(path, 'wb') as f:
         pickle.dump(d, f)
+
+def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='metrics.json', 
+                state_hist_filename='state_dict_hist.json', data_filename='data_and_preds.pkl',
+                args_filename='task.pkl'):
+    metrics_path = os.path.join(logdir, metrics_filename)
+    if os.path.exists(metrics_path):
+        metrics = load_json(metrics_path)
+    else:
+        metrics = aggregate_metrics(logdir)
+    args_path = os.path.join(logdir, args_filename)
+    if os.path.exists(args_path):
+        args = load_pickle(args_path)
+    else:
+        args = None
+    metrics['test_accs'] = {float(k):v for k,v in metrics['test_accs'].items()}
+    lazy_model_ckps = []
+    lazy_state_hists = []
+    lazy_data_and_preds = []
+    model_metrics = []
+    model_paths = []
+    for root, _, files in os.walk(logdir):
+        model_files = [f for f in files if f.startswith('model') and f.endswith('.pt')]
+        if len(model_files) > 0:
+            model_fp = os.path.join(root, model_files[-1])
+            lazy_model_ckps.append(lazy_load_json(model_fp))
+        # if state_hist_filename in files:
+        #     sh_fp = os.path.join(root, state_hist_filename)
+        #     lazy_state_hists.append(lazy_load_json(sh_fp))
+        if data_filename in files:
+            data_fp = os.path.join(root, data_filename)
+            lazy_data_and_preds.append(lazy_load_pickle(data_fp))
+        if metrics_filename in files and (root != logdir):
+            m_fp = os.path.join(root, metrics_filename)
+            model_metrics.append(load_json(m_fp))
+            model_paths.append(root)
+        if args is None and (args_filename in files):
+            args_path = os.path.join(root, args_filename)
+            args = args = load_pickle(args_path)
+    log_dict = {
+        'metrics': metrics,
+        'models': lazy_model_ckps,
+        'model_metrics': model_metrics,
+        'model_paths': model_paths,
+        'data_and_preds': lazy_data_and_preds,
+        'args': args
+    }
+    return log_dict
+
+def load_logs(logdirs, labels):
+    if len(logdirs) == 1:
+        logdicts = _load_logs(logdirs[0])
+    else:
+        logdicts = {}
+        while len(labels) < len(logdirs):
+            labels.append(None)
+        for logdir, label in zip(logdirs, labels):
+            if (label is None) or (label == 'na'):
+                model_name = os.path.basename(logdir)
+                i = 0
+                mn = model_name
+                while mn in logdicts:
+                    i += 1
+                    mn = f'{model_name}_{i}'
+                label = mn
+            logdicts[label] = _load_logs(logdir)
+    return logdicts
