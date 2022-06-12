@@ -1,6 +1,6 @@
 import time
-import traceback
-from typing import Iterable, List, Type, Union
+from turtle import forward
+from typing import List, Type, Union
 from attr import define
 from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
@@ -62,6 +62,7 @@ class CommonModelMixin(object):
         self.num_units = num_units
         self.activation = activation
         self.use_bias = bias
+        self.dropout_p = self.params.common_params.dropout_p
 
 class ClassificationModelMixin(object):
     def load_classification_params(self) -> None:
@@ -248,7 +249,18 @@ class ConsistencyOptimizationMixin(object):
             i += 1
             prev_loss = loss
 
-    
+class IdentityLayer(AbstractModel):
+    def forward(self, x):
+        return x
+
+    def compute_loss(self, x, y, return_logits=True):
+        logits = x
+        loss = torch.zeros((x.shape[0],), device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss    
+
 class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOptimizationMixin):
     class ModelParams(BaseParameters):
         def __init__(self, cls):
@@ -320,12 +332,22 @@ class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOpti
         else:
             W_back, bias_back = None, None
         self._optimize_activations(state_hist, x.T, W_lat, b, W_back, bias_back)
-        logits = state_hist[-1]
+        logits = state_hist[-1].T
         if return_state_hist:
             state_hist = torch.stack(state_hist, dim=1).transpose(0, 2)
             return logits, state_hist
         else:
             return logits
+
+    def compute_loss(self, x, y, return_state_hist=False, return_logits=False):
+        logits, state_hist = self.forward(x, return_state_hist=True)
+        loss = torch.tensor(0., device=x.device)
+        output = (loss,)
+        if return_state_hist:
+            output = output + (state_hist,)
+        if return_logits:
+            output = (logits,) + output
+        return output
 
 class ConsistentActivationClassifier(ConsistentActivationLayer, ClassificationModelMixin):
     class ModelParams(ConsistentActivationLayer.ModelParams):
@@ -341,7 +363,7 @@ class ConsistentActivationClassifier(ConsistentActivationLayer, ClassificationMo
     def forward(self, x, return_state_hist=False):
         logits, state_hist = super().forward(x, return_state_hist=True)
         num_logits = (1 if self.num_classes == 2 else self.num_classes)
-        logits = logits.T[:, :num_logits]
+        logits = logits[:, :num_logits]
         if return_state_hist:
             return logits, state_hist
         else:
@@ -637,7 +659,9 @@ class SequentialLayers(AbstractModel, CommonModelMixin):
             lp.common_params.input_size = x.shape[1:]
             l = lp.cls(lp)
             x = l(x)
-            print(x.shape)
+            if isinstance(x, tuple):
+                x = x[0]
+            print(type(l), x.shape)
             layers.append(l)
         self.layers = nn.ModuleList(layers)
     
@@ -658,6 +682,19 @@ class SequentialLayers(AbstractModel, CommonModelMixin):
             return out, extra_outputs
         else:
             return out
+    
+    def compute_loss(self, x, y, return_logits=True):
+        out = self.forward(x)
+        if isinstance(out, tuple):
+            logits = out[0]
+            loss = out[1][0]
+        else:
+            logits = out
+            loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
 
 class GeneralClassifier(AbstractModel):
     class ModelParams(BaseParameters):
@@ -719,12 +756,12 @@ class GeneralClassifier(AbstractModel):
         else:
             logits = out
             extra_outputs = ()
-        if self.params.classifier_params.classification_params.num_classes == 2:
+        if (logits.dim() == 1) or ((logits.dim() > 1) and (logits.shape[-1] == 1)):
             loss = nn.functional.binary_cross_entropy_with_logits(logits, y)
         else:
             loss = nn.functional.cross_entropy(logits, y)
         if len(extra_outputs) > 0:
-            loss = loss + torch.stack(extra_outputs[0], 0).sum(0)
+            loss = loss #+ torch.stack(extra_outputs[0], 0).sum(0)
             extra_outputs = extra_outputs[1:]
             assert loss.dim() == 0
         outputs = []
@@ -734,3 +771,169 @@ class GeneralClassifier(AbstractModel):
         if len(extra_outputs) > 0:
             outputs.extend(extra_outputs)
         return tuple(outputs)
+
+class EyeModel(AbstractModel, CommonModelMixin):
+    class ModelParams(BaseParameters):
+        common_params: CommonModelParams
+        photoreceptor_params: BaseParameters
+        horizontal_cell_params: BaseParameters
+        bipolar_cell_params: BaseParameters
+        amacrine_cell_params: BaseParameters
+        ganglion_cell_params: BaseParameters
+    
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.load_common_params()
+        self._make_network()
+        self._make_name()
+    
+    def _make_network(self):
+        x = torch.rand((1, *(self.input_size)))
+        self.photoreceptors = self.params.photoreceptor_params.cls(self.params.photoreceptor_params)
+        x = self.photoreceptors.eval()(x)
+        self.params.horizontal_cell_params.common_params.input_size = x.shape[1:]
+        self.h_cells = self.params.horizontal_cell_params.cls(self.params.horizontal_cell_params)
+        x = self.h_cells.eval()(x)
+        self.params.bipolar_cell_params.common_params.input_size = x.shape[1:]
+        self.bp_cells = self.params.bipolar_cell_params.cls(self.params.bipolar_cell_params)
+        x= self.bp_cells.eval()(x)
+        self.params.amacrine_cell_params.common_params.input_size = x.shape[1:]
+        self.params.ganglion_cell_params.common_params.input_size = x.shape[1:]
+        self.a_cells = self.params.amacrine_cell_params.cls(self.params.amacrine_cell_params)
+        self.g_cells = self.params.ganglion_cell_params.cls(self.params.ganglion_cell_params)
+
+        self.dropout = nn.Dropout2d(self.params.common_params.dropout_p)
+        self.activation = self.activation()
+
+    def forward(self, x, *fwd_args, **fwd_kwargs):
+        out = x
+        extra_outputs = []
+
+        def forward_and_maybe_loss(l, x):
+            if self.training:
+                out = l.compute_loss(x, None, return_logits=True)
+            else:
+                out = l(x, *fwd_args, **fwd_kwargs)
+            if isinstance(out, tuple):
+                extra_outputs.append(out[1:])
+                out = out[0]
+            return out
+
+        def maybe_acitvate(l, x):
+            if not isinstance(l, SequentialLayers):
+                x = self.activation(x)
+            return x
+
+        def maybe_dropout(l, x):
+            if not isinstance(l, SequentialLayers):
+                x = self.dropout(x)
+            return x
+
+        out = forward_and_maybe_loss(self.photoreceptors, out)
+        out = maybe_acitvate(self.photoreceptors, out)
+
+        out = forward_and_maybe_loss(self.h_cells, out)
+        out = maybe_acitvate(self.h_cells, out)
+
+        out = forward_and_maybe_loss(self.bp_cells, out)
+        out = maybe_acitvate(self.bp_cells, out)
+        out = maybe_dropout(self.bp_cells, out)
+        
+        a_proj = forward_and_maybe_loss(self.a_cells, out)
+        a_proj = maybe_acitvate(self.a_cells, a_proj)
+        a_proj = maybe_dropout(self.a_cells, a_proj)
+        
+        out = forward_and_maybe_loss(self.g_cells, a_proj + out)
+        out = maybe_acitvate(self.g_cells, out)
+        out = maybe_dropout(self.g_cells, out)
+        
+        if len(extra_outputs) > 0:
+            return out, extra_outputs
+        else:
+            return out
+    
+    def compute_loss(self, x, y, return_logits=True):
+        out = self.forward(x)
+        if isinstance(out, tuple):
+            logits = out[0]
+            loss = out[1][0]
+        else:
+            logits = out
+            loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+        
+
+@define(slots=False)
+class ConvParams:
+    kernel_sizes: List[int] = None
+    strides: List[int] = None
+    padding: List[int] = None
+
+class ConvEncoder(AbstractModel, CommonModelMixin):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        common_params: CommonModelParams = None
+        conv_params: ConvParams = None
+        def __attrs_post_init__(self):
+            self.common_params: CommonModelParams = CommonModelParams()
+            self.conv_params: ConvParams = ConvParams()            
+
+    def __init__(self, params: ModelParams) -> None:
+        super(ConvEncoder, self).__init__(params)
+        self.params = params
+        self.load_common_params()
+        self._load_conv_params()
+        self._make_name()
+        self._make_network()
+
+    def _load_conv_params(self):
+        self.kernel_sizes = self.params.conv_params.kernel_sizes
+        self.strides = self.params.conv_params.strides
+        self.padding = self.params.conv_params.padding
+    
+    def _make_name(self):
+        layer_desc = [f'{f}x{ks}_{s}_{p}' for ks,s,p,f in zip(self.kernel_sizes, self.strides, self.padding, self.num_units)]
+        layer_desc_2 = []
+        curr_desc = ''
+        for i,x in enumerate(layer_desc):
+            if x == curr_desc:
+                count += 1
+            else:
+                if curr_desc != '':
+                    layer_desc_2.append(f'{count}x{curr_desc}')
+                count = 1
+                curr_desc = x
+            if i == len(layer_desc)-1:
+                layer_desc_2.append(f'{count}x{curr_desc}')
+        self.name = 'Conv-'+'_'.join(layer_desc_2)
+    
+    def _make_network(self):
+        layers = []
+        nfilters = [self.input_size[0], *self.num_units]
+        kernel_sizes = [None] + self.kernel_sizes
+        strides = [None] + self.strides
+        padding = [None] + self.padding
+        for i, (k,s,f,p) in enumerate(zip(kernel_sizes, strides, nfilters, padding)):
+            if i > 0:
+                layers.append(nn.Conv2d(nfilters[i-1], f, k, s, p, bias=self.use_bias))
+                layers.append(self.activation())
+                if self.dropout_p > 0:
+                    layers.append(nn.Dropout2d(self.dropout_p))
+        self.conv_model = nn.Sequential(*layers)
+    
+    def forward(self, x, return_state_hist=False, **kwargs):
+        feat = self.conv_model(x)
+        return feat
+    
+    def compute_loss(self, x, y, return_state_hist=False, return_logits=False):
+        logits = self.forward(x, return_state_hist=True)
+        loss = torch.tensor(0., device=x.device)
+        output = (loss,)
+        if return_state_hist:
+            output = output + (None,)
+        if return_logits:
+            output = (logits,) + output
+        return output
