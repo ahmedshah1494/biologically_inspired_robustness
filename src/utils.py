@@ -138,3 +138,12 @@ def load_logs(logdirs, labels):
                 label = mn
             logdicts[label] = _load_logs(logdir)
     return logdicts
+
+def get_model_checkpoint_dirs(d):
+    model_ckp_dirs = []
+    for root, dirs, files in os.walk(d):
+        model_files = [f for f in files if f.startswith('model') and f.endswith('.pt')]
+        if len(model_files) > 0:
+            model_files = model_files[0]
+            model_ckp_dirs.append(os.path.dirname(root))
+    return model_ckp_dirs
