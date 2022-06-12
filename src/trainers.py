@@ -8,8 +8,9 @@ from mllib.param import BaseParameters
 from numpy import iterable
 import torch
 import numpy as np
+import torchattacks
 
-from mllib.adversarial.attacks import AbstractAttackConfig
+from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper
 from models import ConsistencyOptimizationMixin
 from pruning import PruningMixin
 from utils import aggregate_dicts, merge_iterables_in_dict, write_json, write_pickle
@@ -32,9 +33,12 @@ class AdversarialTrainer(_Trainer, PruningMixin):
 
     def __init__(self, params: AdversarialTrainerParams):
         super().__init__(params.trainer_params)
+        print(self.model)
         self.params = params
         self.training_adv_attack = self._maybe_get_attacks(params.adversarial_params.training_attack_params)
         self.testing_adv_attacks = self._maybe_get_attacks(params.adversarial_params.testing_attack_params)
+        self.data_and_pred_filename = 'data_and_preds.pkl'
+        self.metrics_filename = 'metrics.json'
 
     def _get_attack_from_params(self, p: AbstractAttackConfig):
         return p._cls(self.model, **(p.asdict()))
@@ -98,15 +102,17 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         return new_outputs, metrics
     
     def train(self):
-        super().train()
-        self.iterative_pruning_wrapper(0, self.l1_unstructured_pruning_with_retraining, 0.1)
+        metrics = super().train()
+        val_acc = metrics['val_accuracy']
+        if val_acc > 0.12:
+            self.iterative_pruning_wrapper(0, self.l1_unstructured_pruning_with_retraining, 0.1)
     
     def save_training_logs(self, train_acc, test_accs):
         metrics = {
             'train_acc':train_acc,
             'test_accs':test_accs,
         }
-        write_json(metrics, os.path.join(self.logdir, 'metrics.json'))
+        write_json(metrics, os.path.join(self.logdir, self.metrics_filename))
 
     def save_data_and_preds(self, preds, labels, inputs):
         d = {}
@@ -116,7 +122,7 @@ class AdversarialTrainer(_Trainer, PruningMixin):
                 'Y': labels,
                 'Y_pred': preds[k]
             }
-        write_pickle(d, os.path.join(self.logdir, f'data_and_preds.pkl'))
+        write_pickle(d, os.path.join(self.logdir, self.data_and_pred_filename))
 
     def test(self):
         test_outputs, test_metrics = self.test_loop(post_loop_fn=self.test_epoch_end)
@@ -187,3 +193,54 @@ class ConsistentActivationModelAdversarialTrainer(AdversarialTrainer):
     def train_loop(self, epoch_idx, post_loop_fn=None):
         self._update_act_opt_lrs(epoch_idx)
         return super().train_loop(epoch_idx, post_loop_fn)
+
+class MultiAttackEvaluationTrainer(AdversarialTrainer):
+    def __init__(self, params):
+        super().__init__(params)
+        self.metrics_filename = 'adv_metrics.json'
+        self.data_and_pred_filename = 'adv_data_and_preds.pkl'
+
+    def test_epoch_end(self, outputs, metrics):
+        outputs = aggregate_dicts(outputs)
+        test_eps = [p.eps for p in self.params.adversarial_params.testing_attack_params]
+        new_outputs = aggregate_dicts(outputs)
+        new_outputs = merge_iterables_in_dict(new_outputs)
+        
+        test_acc = {}
+        for k in new_outputs['preds'].keys():
+            acc = (np.array(new_outputs['preds'][k]) == np.array(new_outputs['labels'])).astype(float).mean()
+            test_acc[k] = acc
+        new_outputs['test_acc'] = test_acc
+        return new_outputs, metrics
+
+    def test_step(self, batch, batch_idx):
+        test_pred = {}
+        adv_x = {}
+        test_loss = {}
+        test_acc = {}
+        for atk in self.testing_adv_attacks:
+            if isinstance(atk, FoolboxAttackWrapper):
+                eps = atk.run_kwargs['epsilons'][0]
+            elif isinstance(atk, torchattacks.attack.Attack):
+                eps = atk.eps
+            else:
+                raise NotImplementedError(f'{type(atk)} is not supported')
+            atk_name = f"{atk.__class__.__name__}-{eps}"
+
+            x,y = self._maybe_attack_batch(batch, atk)
+
+            logits, loss = self._get_outputs_and_loss(x, y)
+            logits = logits.detach().cpu()
+            
+            y = y.detach().cpu()
+            acc, _ = compute_accuracy(logits, y)
+
+            preds = get_preds_from_logits(logits)
+            loss = loss.mean().detach().cpu()
+
+            test_pred[atk_name] = preds.numpy().tolist()
+            adv_x[atk_name] = x.detach().cpu().numpy()
+            test_loss[atk_name] = loss
+            test_acc[atk_name] = acc
+        metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
+        return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x}, metrics
