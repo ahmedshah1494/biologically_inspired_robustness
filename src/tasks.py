@@ -9,7 +9,7 @@ from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, Supp
 import torch
 import torchvision
 
-from models import ConsistentActivationClassifier, ConvEncoder, GeneralClassifier, ScanningConsistentActivationLayer, SequentialLayers
+from models import CommonModelParams, ConsistentActivationClassifier, ConsistentActivationLayer, ConvEncoder, EyeModel, GeneralClassifier, IdentityLayer, ScanningConsistentActivationLayer, SequentialLayers
 from runners import AdversarialExperimentConfig, ConsistentActivationAdversarialExperimentConfig
 from trainers import ActivityOptimizationSchedule
 
@@ -60,12 +60,13 @@ def get_consistent_act_classifier_params(num_classes):
     cp.common_params.num_units = num_classes
     cp.classification_params.num_classes = num_classes
 
-def set_consistency_opt_params(p, input_act_consistency, lateral_dependence_type, act_opt_step_size, max_train_time_steps, max_test_time_steps):
+def set_consistency_opt_params(p, input_act_consistency, lateral_dependence_type, act_opt_step_size, max_train_time_steps, max_test_time_steps, backward_dependence_type='Linear'):
     p.consistency_optimization_params.act_opt_step_size = act_opt_step_size
     p.consistency_optimization_params.max_train_time_steps = max_train_time_steps
     p.consistency_optimization_params.max_test_time_steps = max_test_time_steps
     p.consistency_optimization_params.input_act_consistency = input_act_consistency
     p.consistency_optimization_params.lateral_dependence_type = lateral_dependence_type
+    p.consistency_optimization_params.backward_dependence_type = backward_dependence_type
 
 def set_scanning_consistency_opt_params(p, kernel_size, padding, stride, 
                                             act_opt_kernel_size, act_opt_stride, 
@@ -76,6 +77,26 @@ def set_scanning_consistency_opt_params(p, kernel_size, padding, stride,
     p.scanning_consistency_optimization_params.act_opt_kernel_size = act_opt_kernel_size
     p.scanning_consistency_optimization_params.act_opt_stride = act_opt_stride
     p.scanning_consistency_optimization_params.window_input_act_consistency = window_input_act_consistency
+
+def get_cifar10_adv_experiment_params(task):
+    p = ConsistentActivationAdversarialExperimentConfig()
+    set_SGD_params(p)
+    p.optimizer_config.lr = 0.05
+    set_common_training_params(p)
+    test_eps = [0.0, 0.008, 0.016, 0.024, 0.032, 0.048, 0.064]
+    set_adv_params(p, test_eps)
+    dsp = task.get_dataset_params()
+    p.act_opt_config.act_opt_lr_warmup_schedule = ActivityOptimizationSchedule.GEOM
+    p.exp_name = f'{dsp.max_num_train//1000}K'
+    return p
+
+def set_scanning_consistent_activation_layer_params(p: ScanningConsistentActivationLayer.ModelParams,
+                                                    num_units, input_act_opt, lat_dep_type, act_opt_lr, num_steps, kernel_size,
+                                                    padding, stride, act_opt_kernel_size, act_opt_stride, back_dep_type='Linear'):
+    p.common_params.num_units = num_units
+    p.common_params.bias = True
+    set_consistency_opt_params(p, input_act_opt, lat_dep_type, act_opt_lr, num_steps, num_steps, backward_dependence_type=back_dep_type)
+    set_scanning_consistency_opt_params(p, kernel_size, padding, stride, act_opt_kernel_size, act_opt_stride, True)
 class MNISTMLP(AbstractTask):
     def get_dataset_params(self) -> BaseParameters:
         return get_cifar10_params()
@@ -141,6 +162,11 @@ class MNISTConsistentActivationClassifier(AbstractTask):
         return p
 
 class Cifar10ConvConsistentActivation3LTask(AbstractTask):
+    num_units = 64
+    act_opt_lr = 0.21
+    num_steps = 16
+    lat_dep = 'ReLU'
+
     def get_dataset_params(self) -> BaseParameters:
        return get_cifar10_params()
 
@@ -151,20 +177,13 @@ class Cifar10ConvConsistentActivation3LTask(AbstractTask):
         fp.common_params.dropout_p = 0.2
 
         p1: ScanningConsistentActivationLayer.ModelParams = ScanningConsistentActivationLayer.get_params()
-        p1.common_params.num_units = 64
-        p1.common_params.bias = True
-        set_consistency_opt_params(p1, True, 'ReLU', 0.14, 32, 32)
-        set_scanning_consistency_opt_params(p1, 5, 0, 3, 5, 5, True)
+        set_scanning_consistent_activation_layer_params(p1, self.num_units, True, self.lat_dep, self.act_opt_lr, self.num_steps, 5, 0, 3, 5, 5)
 
-        p2 = deepcopy(p1)
-        p2.scanning_consistency_optimization_params.kernel_size = 3
-        p2.scanning_consistency_optimization_params.padding = 1
-        p2.scanning_consistency_optimization_params.stride = 1
+        p2: ScanningConsistentActivationLayer.ModelParams = ScanningConsistentActivationLayer.get_params()
+        set_scanning_consistent_activation_layer_params(p2, self.num_units, True, self.lat_dep, self.act_opt_lr, self.num_steps, 3, 1, 1, 5, 5)
 
-        p3 = deepcopy(p1)
-        p3.scanning_consistency_optimization_params.kernel_size = 3
-        p3.scanning_consistency_optimization_params.padding = 1
-        p3.scanning_consistency_optimization_params.stride = 2
+        p3: ScanningConsistentActivationLayer.ModelParams = ScanningConsistentActivationLayer.get_params()
+        set_scanning_consistent_activation_layer_params(p3, self.num_units, True, self.lat_dep, self.act_opt_lr, self.num_steps, 3, 1, 2, 5, 5)
         
         fp.layer_params = [p1, p2, p3]
 
@@ -192,6 +211,28 @@ class Cifar10ConvConsistentActivation3LTask(AbstractTask):
         dsp = self.get_dataset_params()
         p.act_opt_config.act_opt_lr_warmup_schedule = ActivityOptimizationSchedule.GEOM
         p.exp_name = f'{dsp.max_num_train//1000}K'
+        return p
+
+class Cifar10ConvConsistentActivation4LTask(Cifar10ConvConsistentActivation3LTask):
+    def get_model_params(self) -> BaseParameters:
+        p: GeneralClassifier.ModelParams = super().get_model_params()
+        p4: ScanningConsistentActivationLayer.ModelParams = ScanningConsistentActivationLayer.get_params()
+        set_scanning_consistent_activation_layer_params(p4, self.num_units, True, self.lat_dep, self.act_opt_lr, self.num_steps, 3, 1, 1, 5, 5)
+        p.feature_model_params.layer_params.append(p4)
+        return p
+
+class Cifar10ConvConsistentActivation5LTask(Cifar10ConvConsistentActivation4LTask):
+    def get_model_params(self) -> BaseParameters:
+        p: GeneralClassifier.ModelParams = super().get_model_params()
+        p5: ScanningConsistentActivationLayer.ModelParams = ScanningConsistentActivationLayer.get_params()
+        set_scanning_consistent_activation_layer_params(p5, self.num_units, True, self.lat_dep, self.act_opt_lr, self.num_steps, 3, 1, 2, 3, 3)
+        p.feature_model_params.layer_params.append(p5)
+        return p
+    
+    def get_experiment_params(self) -> ConsistentActivationAdversarialExperimentConfig:
+        p = super().get_experiment_params()
+        p.act_opt_config.num_warmup_epochs = 10
+        p.act_opt_config.init_act_opt_lr = 0.001
         return p
 
 class Cifar10ConvConsistentActivation3LwPRandHCellsTask(Cifar10ConvConsistentActivation3LTask):
@@ -337,4 +378,180 @@ class Cifar10Conv3LTask(AbstractTask):
         dsp = self.get_dataset_params()
         p.act_opt_config.act_opt_lr_warmup_schedule = ActivityOptimizationSchedule.GEOM
         p.exp_name = f'{dsp.max_num_train//1000}K'
+        return p
+
+class Cifar10EyeModelTask(AbstractTask):
+    def get_dataset_params(self) -> BaseParameters:
+       p = get_cifar10_params()
+       return p
+
+    @classmethod
+    def get_horizontal_cell_params(cls, num_steps):
+        h_params: ScanningConsistentActivationLayer.ModelParams = ScanningConsistentActivationLayer.get_params()
+        h_params.common_params.activation = torch.nn.ReLU
+        h_params.scanning_consistency_optimization_params.use_forward = False
+        h_params.common_params.num_units = 1
+        h_params.common_params.bias = True
+        set_consistency_opt_params(h_params, False, 'ReLU', 0.14, num_steps, num_steps)
+        set_scanning_consistency_opt_params(h_params, 1, 0, 1, 4, 4, True)
+        return h_params
+    
+    @classmethod
+    def get_bipolar_cell_params(cls, num_steps, act_opt_lr, input_act_opt, num_units,
+                                    act_opt_kernel_size=5):
+        bp_params: SequentialLayers.ModelParams = SequentialLayers.get_params()
+        bp_params.common_params.activation = torch.nn.ReLU
+        bp_params.common_params.dropout_p = 0.2
+
+        p1: ScanningConsistentActivationLayer.ModelParams = ScanningConsistentActivationLayer.get_params()
+        p1.common_params.num_units = num_units
+        p1.common_params.bias = True
+        set_consistency_opt_params(p1, input_act_opt, 'ReLU', act_opt_lr, num_steps, num_steps)
+        set_scanning_consistency_opt_params(p1, 5, 0, 3, act_opt_kernel_size, act_opt_kernel_size, True)
+
+        p2 = deepcopy(p1)
+        p2.scanning_consistency_optimization_params.kernel_size = 3
+        p2.scanning_consistency_optimization_params.padding = 1
+        p2.scanning_consistency_optimization_params.stride = 1
+
+        p3 = deepcopy(p1)
+        p3.scanning_consistency_optimization_params.kernel_size = 3
+        p3.scanning_consistency_optimization_params.padding = 1
+        p3.scanning_consistency_optimization_params.stride = 2
+
+        bp_params.layer_params = [p1, p2, p3]
+
+        return bp_params
+
+    @classmethod
+    def get_amacrine_cell_params(cls, num_steps, act_opt_lr, input_act_opt, num_units,
+                                    act_opt_kernel_size=5):
+        p1: ScanningConsistentActivationLayer.ModelParams = ScanningConsistentActivationLayer.get_params()
+        p1.common_params.num_units = num_units
+        p1.common_params.bias = True
+        set_consistency_opt_params(p1, input_act_opt, 'ReLU', act_opt_lr, num_steps, num_steps)
+        set_scanning_consistency_opt_params(p1, 3, 1, 1, act_opt_kernel_size, act_opt_kernel_size, True)
+        return p1
+
+    @classmethod
+    def get_ganglion_cell_params(cls, num_steps, act_opt_lr, input_act_opt, num_units,
+                                    act_opt_kernel_size=5):
+        p1: ScanningConsistentActivationLayer.ModelParams = ScanningConsistentActivationLayer.get_params()
+        p1.common_params.num_units = num_units
+        p1.common_params.bias = True
+        set_consistency_opt_params(p1, input_act_opt, 'ReLU', act_opt_lr, num_steps, num_steps)
+        set_scanning_consistency_opt_params(p1, 3, 1, 1, act_opt_kernel_size, act_opt_kernel_size, True)
+        return p1
+
+    @classmethod
+    def get_classifier_params(cl, feature_model_params, act_opt_lr, input_act_opt):
+        cp: ConsistentActivationLayer = ConsistentActivationLayer.get_params()
+        cp.common_params.num_units = 10
+        cp.common_params.activation = torch.nn.Identity
+        set_consistency_opt_params(cp, input_act_opt, 'Linear', act_opt_lr, 0, 0)
+
+        p: GeneralClassifier.ModelParams = GeneralClassifier.get_params()
+        p.feature_model_params = feature_model_params
+        p.classifier_params = cp
+
+        return p
+
+    @classmethod
+    def get_eye_model_classifier_params(cls, num_steps, act_opt_lr, input_act_opt, num_units,
+                                            act_opt_kernel_size=5):
+        eye_params: EyeModel.ModelParams = EyeModel.get_params()
+        
+        eye_params.common_params = CommonModelParams()
+        eye_params.common_params.input_size = [3, 32, 32]
+        eye_params.common_params.activation = torch.nn.ReLU
+        eye_params.common_params.dropout_p = 0.2
+
+        eye_params.photoreceptor_params = IdentityLayer.get_params()
+
+        eye_params.horizontal_cell_params = Cifar10EyeModelTask.get_horizontal_cell_params(num_steps)
+        eye_params.bipolar_cell_params = Cifar10EyeModelTask.get_bipolar_cell_params(num_steps, act_opt_lr, input_act_opt, num_units, act_opt_kernel_size)
+        eye_params.amacrine_cell_params = Cifar10EyeModelTask.get_amacrine_cell_params(num_steps, act_opt_lr, input_act_opt, num_units, act_opt_kernel_size)
+        eye_params.ganglion_cell_params = Cifar10EyeModelTask.get_ganglion_cell_params(num_steps, act_opt_lr, input_act_opt, num_units, act_opt_kernel_size)
+        
+        p = Cifar10EyeModelTask.get_classifier_params(eye_params, act_opt_lr, input_act_opt)
+
+        return p
+
+    def get_model_params(self) -> BaseParameters:
+        num_steps = 16
+        act_opt_lr = 0.21
+        input_act_opt = True
+        num_units = 64
+        p = Cifar10EyeModelTask.get_eye_model_classifier_params(num_steps, act_opt_lr, input_act_opt, num_units)
+        return p
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        p = get_cifar10_adv_experiment_params(self)
+        return p
+
+class Cifar10EyeModelTaskwVCortex(AbstractTask):
+    def get_dataset_params(self) -> BaseParameters:
+       return get_cifar10_params()
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        p = get_cifar10_adv_experiment_params(self)
+        return p
+
+    @classmethod
+    def get_eye_model_wVCtx_classifier_params(cls, num_steps, act_opt_lr, input_act_opt, num_units, num_vctx_units, act_opt_kernel_size=5) -> BaseParameters:
+        p: GeneralClassifier.ModelParams = Cifar10EyeModelTask.get_eye_model_classifier_params(num_steps, act_opt_lr, input_act_opt, num_units, act_opt_kernel_size=act_opt_kernel_size)
+
+        eye_params = p.feature_model_params
+
+        v1: ConsistentActivationLayer.ModelParams = ConsistentActivationLayer.get_params()
+        v1.common_params.num_units = num_vctx_units
+        set_consistency_opt_params(v1, input_act_opt, 'ReLU', act_opt_lr, num_steps, num_steps)
+
+        v2: ConsistentActivationLayer.ModelParams = ConsistentActivationLayer.get_params()
+        v2.common_params.num_units = num_vctx_units
+        set_consistency_opt_params(v2, input_act_opt, 'ReLU', act_opt_lr, num_steps, num_steps)
+
+        v4: ConsistentActivationLayer.ModelParams = ConsistentActivationLayer.get_params()
+        v4.common_params.num_units = num_vctx_units
+        set_consistency_opt_params(v4, input_act_opt, 'ReLU', act_opt_lr, num_steps, num_steps)
+
+        vctx_params: SequentialLayers.ModelParams = SequentialLayers.get_params()
+        vctx_params.common_params.input_size = [3, 32, 32]
+        vctx_params.common_params.activation = torch.nn.ReLU
+        vctx_params.common_params.dropout_p = 0.1
+        vctx_params.layer_params = [eye_params, v1]
+
+        p.feature_model_params = vctx_params
+
+        return p
+
+    def get_model_params(self) -> BaseParameters:
+        num_steps = 16
+        act_opt_lr = 0.21
+        input_act_opt = True
+        num_units = 64
+        num_vctx_units = 1024
+
+        p = Cifar10EyeModelTaskwVCortex.get_eye_model_wVCtx_classifier_params(num_steps, act_opt_lr, input_act_opt, num_units, num_vctx_units)
+        return p
+
+class Cifar10EyeModel128UTaskwVCortex(AbstractTask):
+    def get_dataset_params(self) -> BaseParameters:
+       return get_cifar10_params()
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        p = get_cifar10_adv_experiment_params(self)
+        p.batch_size = 32
+        p.optimizer_config.lr = 0.01
+        p.training_params.nepochs = 50
+        return p
+
+    def get_model_params(self) -> BaseParameters:
+        num_steps = 16
+        act_opt_lr = 0.21
+        input_act_opt = True
+        num_units = 128
+        num_vctx_units = 1024
+
+        p = Cifar10EyeModelTaskwVCortex.get_eye_model_wVCtx_classifier_params(num_steps, act_opt_lr, input_act_opt, num_units, num_vctx_units)
         return p
