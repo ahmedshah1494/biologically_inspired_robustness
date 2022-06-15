@@ -221,6 +221,18 @@ class Cifar10ConvConsistentActivation4LTask(Cifar10ConvConsistentActivation3LTas
         p.feature_model_params.layer_params.append(p4)
         return p
 
+class Cifar10ConvConsistentActivation4LwNoActOpt512UVCortexTask(Cifar10ConvConsistentActivation4LTask):
+    def get_model_params(self) -> BaseParameters:
+        p: GeneralClassifier.ModelParams = super().get_model_params()
+        p = Cifar10EyeModelTaskwVCortex.add_wVCtx_classifier_params(p, 0, 1e-10, False, 512)
+        return p
+
+class Cifar10ConvConsistentActivation4Lw512UVCortexTask(Cifar10ConvConsistentActivation4LTask):
+    def get_model_params(self) -> BaseParameters:
+        p: GeneralClassifier.ModelParams = super().get_model_params()
+        p = Cifar10EyeModelTaskwVCortex.add_wVCtx_classifier_params(p, 16, 0.21, True, 512)
+        return p
+
 class Cifar10ConvConsistentActivation5LTask(Cifar10ConvConsistentActivation4LTask):
     def get_model_params(self) -> BaseParameters:
         p: GeneralClassifier.ModelParams = super().get_model_params()
@@ -233,6 +245,14 @@ class Cifar10ConvConsistentActivation5LTask(Cifar10ConvConsistentActivation4LTas
         p = super().get_experiment_params()
         p.act_opt_config.num_warmup_epochs = 10
         p.act_opt_config.init_act_opt_lr = 0.001
+        return p
+
+class Cifar10ConvConsistentActivation6LTask(Cifar10ConvConsistentActivation5LTask):
+    def get_model_params(self) -> BaseParameters:
+        p: GeneralClassifier.ModelParams = super().get_model_params()
+        p6: ScanningConsistentActivationLayer.ModelParams = ScanningConsistentActivationLayer.get_params()
+        set_scanning_consistent_activation_layer_params(p6, self.num_units, True, self.lat_dep, self.act_opt_lr, self.num_steps, 3, 1, 1, 3, 3)
+        p.feature_model_params.layer_params.append(p6)
         return p
 
 class Cifar10ConvConsistentActivation3LwPRandHCellsTask(Cifar10ConvConsistentActivation3LTask):
@@ -498,9 +518,7 @@ class Cifar10EyeModelTaskwVCortex(AbstractTask):
         return p
 
     @classmethod
-    def get_eye_model_wVCtx_classifier_params(cls, num_steps, act_opt_lr, input_act_opt, num_units, num_vctx_units, act_opt_kernel_size=5) -> BaseParameters:
-        p: GeneralClassifier.ModelParams = Cifar10EyeModelTask.get_eye_model_classifier_params(num_steps, act_opt_lr, input_act_opt, num_units, act_opt_kernel_size=act_opt_kernel_size)
-
+    def add_wVCtx_classifier_params(cls, p, num_steps, act_opt_lr, input_act_opt, num_vctx_units) -> BaseParameters:
         eye_params = p.feature_model_params
 
         v1: ConsistentActivationLayer.ModelParams = ConsistentActivationLayer.get_params()
@@ -518,7 +536,7 @@ class Cifar10EyeModelTaskwVCortex(AbstractTask):
         vctx_params: SequentialLayers.ModelParams = SequentialLayers.get_params()
         vctx_params.common_params.input_size = [3, 32, 32]
         vctx_params.common_params.activation = torch.nn.ReLU
-        vctx_params.common_params.dropout_p = 0.1
+        # vctx_params.common_params.dropout_p = 0.1
         vctx_params.layer_params = [eye_params, v1]
 
         p.feature_model_params = vctx_params
@@ -531,8 +549,26 @@ class Cifar10EyeModelTaskwVCortex(AbstractTask):
         input_act_opt = True
         num_units = 64
         num_vctx_units = 1024
+        p: GeneralClassifier.ModelParams = Cifar10EyeModelTask.get_eye_model_classifier_params(num_steps, act_opt_lr, input_act_opt, num_units)
+        p = Cifar10EyeModelTaskwVCortex.add_wVCtx_classifier_params(p, num_steps, act_opt_lr, input_act_opt, num_vctx_units)
+        return p
 
-        p = Cifar10EyeModelTaskwVCortex.get_eye_model_wVCtx_classifier_params(num_steps, act_opt_lr, input_act_opt, num_units, num_vctx_units)
+class Cifar10EyeModelTaskwNoActOptVCortex(AbstractTask):
+    def get_dataset_params(self) -> BaseParameters:
+       return get_cifar10_params()
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        p = get_cifar10_adv_experiment_params(self)
+        return p
+
+    def get_model_params(self) -> BaseParameters:
+        num_steps = 16
+        act_opt_lr = 0.21
+        input_act_opt = True
+        num_units = 64
+        num_vctx_units = 64
+        p: GeneralClassifier.ModelParams = Cifar10EyeModelTask.get_eye_model_classifier_params(num_steps, act_opt_lr, input_act_opt, num_units)
+        p = Cifar10EyeModelTaskwVCortex.add_wVCtx_classifier_params(p, 0, 1e-10, input_act_opt, num_vctx_units)
         return p
 
 class Cifar10EyeModel128UTaskwVCortex(AbstractTask):
@@ -553,5 +589,6 @@ class Cifar10EyeModel128UTaskwVCortex(AbstractTask):
         num_units = 128
         num_vctx_units = 1024
 
-        p = Cifar10EyeModelTaskwVCortex.get_eye_model_wVCtx_classifier_params(num_steps, act_opt_lr, input_act_opt, num_units, num_vctx_units)
+        p: GeneralClassifier.ModelParams = Cifar10EyeModelTask.get_eye_model_classifier_params(num_steps, act_opt_lr, input_act_opt, num_units)
+        p = Cifar10EyeModelTaskwVCortex.add_wVCtx_classifier_params(p, num_steps, act_opt_lr, input_act_opt, num_vctx_units)
         return p
