@@ -41,6 +41,8 @@ class ConsistencyOptimizationParams:
     sparsify_act: bool = False
     sparsity_coeff: float = 1.
 
+    activate_logits: bool = True
+
 class CommonModelMixin(object):
     def add_common_params_to_name(self):
         activation_str = self.activation.__str__()
@@ -109,6 +111,7 @@ class ConsistencyOptimizationMixin(object):
         sparsity_coeff = self.params.consistency_optimization_params.sparsity_coeff
         max_train_time_steps = self.params.consistency_optimization_params.max_train_time_steps
         max_test_time_steps = self.params.consistency_optimization_params.max_test_time_steps
+        activate_logits = self.params.consistency_optimization_params.activate_logits
 
         self.input_act_consistency = input_act_consistency
         self.act_act_consistency = act_act_consistency
@@ -127,6 +130,7 @@ class ConsistencyOptimizationMixin(object):
         self.sparsity_coeff = sparsity_coeff
         self.use_pt_optimizer = False
         self.truncate_act_opt_grad = False
+        self.activate_logits = activate_logits
         
     def _get_activation_update_manual(self, act:torch.Tensor, W:torch.Tensor, b:torch.Tensor, normalize_by_act_norm=False):
         diag_mask = 1-torch.eye(W.shape[1], device=W.device)
@@ -284,6 +288,7 @@ class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOpti
     def _make_network(self):
         state_size = self.num_units + self.input_size
         self.activation = self.activation()
+        self.dropout = nn.Dropout(self.dropout_p)
         # self.weight = nn.Parameter(torch.empty((self.num_units, state_size)), True)
         # self.bias = nn.Parameter(torch.empty((self.num_units,)).zero_(), self.use_bias)
         # if self.input_act_consistency:
@@ -333,6 +338,9 @@ class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOpti
             W_back, bias_back = None, None
         self._optimize_activations(state_hist, x.T, W_lat, b, W_back, bias_back)
         logits = state_hist[-1].T
+        if self.activate_logits:
+            logits = self.activation(logits)
+            logits = self.dropout(logits)
         if return_state_hist:
             state_hist = torch.stack(state_hist, dim=1).transpose(0, 2)
             return logits, state_hist
@@ -461,6 +469,7 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
         else:
             self.fwd_layer = nn.Identity()
         self.activation = self.params.common_params.activation()
+        self.dropout = nn.Dropout(self.dropout_p)
         self._maybe_create_overlap_count_map()
     
     def _get_num_padding(self, n, k, s):
@@ -613,6 +622,9 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
                 s = s.reshape(s.shape[0], s.shape[1], *(self.output_spatial_dims))
             return s
         logits = reshape_state(state_hist[-1])
+        if self.activate_logits:
+            logits = self.activation(logits)
+            logits = self.dropout(logits)
         if return_state_hist:
             state_hist = [reshape_state(s) for s in state_hist]
             state_hist = torch.stack(state_hist, dim=1)
@@ -649,8 +661,8 @@ class SequentialLayers(AbstractModel, CommonModelMixin):
         self.name += f'-{self.params.common_params.dropout_p}Dropout'
     
     def _make_network(self):
-        self.activation = self.params.common_params.activation()
-        self.dropout = nn.Dropout(self.params.common_params.dropout_p)
+        # self.activation = self.params.common_params.activation()
+        # self.dropout = nn.Dropout(self.params.common_params.dropout_p)
 
         x = torch.rand(1,*(self.params.common_params.input_size))
         layers = []
@@ -676,8 +688,9 @@ class SequentialLayers(AbstractModel, CommonModelMixin):
             if isinstance(out, tuple):
                 extra_outputs.append(out[1:])
                 out = out[0]
-            out = self.activation(out)
-            out = self.dropout(out)
+            # print(type(l), out.shape, out.grad_fn)
+            # out = self.activation(out)
+            # out = self.dropout(out)
         if len(extra_outputs) > 0:
             return out, extra_outputs
         else:
@@ -719,7 +732,10 @@ class GeneralClassifier(AbstractModel):
             x = x[0]
 
         cls_params = self.params.classifier_params
-        cls_params.common_params.input_size = x.shape[1:]
+        if hasattr(cls_params, 'common_params'):
+            cls_params.common_params.input_size = x.shape[1:]
+        else:
+            cls_params.input_size = x.shape[1:]
         self.classifier = cls_params.cls(cls_params)
     
     def forward(self, x, *fwd_args, **fwd_kwargs):
@@ -830,22 +846,22 @@ class EyeModel(AbstractModel, CommonModelMixin):
             return x
 
         out = forward_and_maybe_loss(self.photoreceptors, out)
-        out = maybe_acitvate(self.photoreceptors, out)
+        # out = maybe_acitvate(self.photoreceptors, out)
 
         out = forward_and_maybe_loss(self.h_cells, out)
-        out = maybe_acitvate(self.h_cells, out)
+        # out = maybe_acitvate(self.h_cells, out)
 
         out = forward_and_maybe_loss(self.bp_cells, out)
-        out = maybe_acitvate(self.bp_cells, out)
-        out = maybe_dropout(self.bp_cells, out)
+        # out = maybe_acitvate(self.bp_cells, out)
+        # out = maybe_dropout(self.bp_cells, out)
         
         a_proj = forward_and_maybe_loss(self.a_cells, out)
-        a_proj = maybe_acitvate(self.a_cells, a_proj)
-        a_proj = maybe_dropout(self.a_cells, a_proj)
+        # a_proj = maybe_acitvate(self.a_cells, a_proj)
+        # a_proj = maybe_dropout(self.a_cells, a_proj)
         
         out = forward_and_maybe_loss(self.g_cells, a_proj + out)
-        out = maybe_acitvate(self.g_cells, out)
-        out = maybe_dropout(self.g_cells, out)
+        # out = maybe_acitvate(self.g_cells, out)
+        # out = maybe_dropout(self.g_cells, out)
         
         if len(extra_outputs) > 0:
             return out, extra_outputs
