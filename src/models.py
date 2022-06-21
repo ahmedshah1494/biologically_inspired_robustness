@@ -5,6 +5,7 @@ from attr import define
 from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
 import numpy as np
+from positional_encodings.torch_encodings import PositionalEncodingPermute2D
 
 from torch import dropout, nn
 import torch
@@ -642,6 +643,47 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
             output = (logits,) + output
         return output
 
+@define(slots=False)
+class PositionalEmbeddingParams:
+    pos_emb_cls: Type = None
+    cat_emb: bool = False
+
+class LearnablePositionEmbedding(nn.Module):
+    def __init__(self, input_shape) -> None:
+        super().__init__()
+        emb = torch.empty(input_shape).unsqueeze(0).uniform_(-0.05, 0.05)
+        self.emb = nn.parameter.Parameter(emb, True)
+    
+    def forward(self, x):
+        return self.emb
+
+class PositionAwareScanningConsistentActivationLayer(ScanningConsistentActivationLayer):
+    class ModelParams(ScanningConsistentActivationLayer.ModelParams):
+        def __init__(self, cls):
+            super().__init__(cls)
+            self.position_embedding_params: PositionalEmbeddingParams = PositionalEmbeddingParams()
+    
+    def _make_network(self):
+        if issubclass(self.params.position_embedding_params.pos_emb_cls, PositionalEncodingPermute2D):
+            self.pos_emb = self.params.position_embedding_params.pos_emb_cls(self.actual_input_size[0])
+        elif issubclass(self.params.position_embedding_params.pos_emb_cls, LearnablePositionEmbedding):
+            self.pos_emb = self.params.position_embedding_params.pos_emb_cls(self.actual_input_size)
+        if self.params.position_embedding_params.cat_emb:
+            self.actual_input_size = list(self.actual_input_size)
+            self.actual_input_size[0] += 1
+            self.input_size = self.actual_input_size[0] * (self.kernel_size ** 2)
+        return super()._make_network()
+    
+    def forward(self, x, return_state_hist=False):
+        pe = self.pos_emb(x)
+        if issubclass(self.params.position_embedding_params.pos_emb_cls, PositionalEncodingPermute2D):
+            pe *= 0.05
+        if self.params.position_embedding_params.cat_emb:
+            x = torch.cat((x, pe), dim=1)
+        else:
+            x = x + pe
+        return super().forward(x, return_state_hist)
+    
 class SequentialLayers(AbstractModel, CommonModelMixin):
     class ModelParams(BaseParameters):
         def __init__(self, cls):
@@ -895,7 +937,7 @@ class ConvEncoder(AbstractModel, CommonModelMixin):
         conv_params: ConvParams = None
         def __attrs_post_init__(self):
             self.common_params: CommonModelParams = CommonModelParams()
-            self.conv_params: ConvParams = ConvParams()            
+            self.conv_params: ConvParams = ConvParams()
 
     def __init__(self, params: ModelParams) -> None:
         super(ConvEncoder, self).__init__(params)
