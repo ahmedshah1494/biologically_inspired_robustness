@@ -1,7 +1,7 @@
 import time
 from turtle import forward
 from typing import List, Type, Union
-from attr import define
+from attrs import define, field
 from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
 import numpy as np
@@ -176,6 +176,7 @@ class ConsistencyOptimizationMixin(object):
         loss = loss.mean()
         if not torch.isfinite(loss):
             print(torch.norm(W), torch.norm(b), torch.norm(x, dim=0).mean(), torch.norm(pred_act, dim=0))
+            exit()
         if self.legacy_act_update_normalization:
             act_update /= act.shape[1]
         return act_update, loss
@@ -267,11 +268,10 @@ class IdentityLayer(AbstractModel):
             return loss    
 
 class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOptimizationMixin):
+    @define(slots=False)
     class ModelParams(BaseParameters):
-        def __init__(self, cls):
-            super().__init__(cls)
-            self.common_params: CommonModelParams = CommonModelParams()
-            self.consistency_optimization_params: ConsistencyOptimizationParams = ConsistencyOptimizationParams()        
+        common_params: CommonModelParams = field(factory=CommonModelParams)
+        consistency_optimization_params: ConsistencyOptimizationParams = field(factory=ConsistencyOptimizationParams)
 
     def __init__(self, params: ModelParams) -> None:
         print('in ConsistentActivationLayer')
@@ -359,10 +359,9 @@ class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOpti
         return output
 
 class ConsistentActivationClassifier(ConsistentActivationLayer, ClassificationModelMixin):
+    @define(slots=False)
     class ModelParams(ConsistentActivationLayer.ModelParams):
-        def __init__(self, cls):
-            super().__init__(cls)
-            self.classification_params: ClassificationModelParams = ClassificationModelParams()   
+        classification_params: ClassificationModelParams = field(factory=ClassificationModelParams)
 
     def __init__(self, params: ModelParams) -> None:
         print('in ConsistentActivationClassifier')
@@ -392,12 +391,11 @@ class ConsistentActivationClassifier(ConsistentActivationLayer, ClassificationMo
             return loss
 
 class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOptimizationMixin):
+    @define(slots=False)
     class ModelParams(BaseParameters):
-        def __init__(self, cls):
-            super().__init__(cls)
-            self.common_params: CommonModelParams = CommonModelParams()
-            self.consistency_optimization_params: ConsistencyOptimizationParams = ConsistencyOptimizationParams()
-            self.scanning_consistency_optimization_params: ScanningConsistencyOptimizationParams = ScanningConsistencyOptimizationParams()
+        common_params: CommonModelParams = field(factory=CommonModelParams)
+        consistency_optimization_params: ConsistencyOptimizationParams = field(factory=ConsistencyOptimizationParams)
+        scanning_consistency_optimization_params: ScanningConsistencyOptimizationParams = field(factory=ScanningConsistencyOptimizationParams)
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -658,10 +656,9 @@ class LearnablePositionEmbedding(nn.Module):
         return self.emb
 
 class PositionAwareScanningConsistentActivationLayer(ScanningConsistentActivationLayer):
+    @define(slots=False)
     class ModelParams(ScanningConsistentActivationLayer.ModelParams):
-        def __init__(self, cls):
-            super().__init__(cls)
-            self.position_embedding_params: PositionalEmbeddingParams = PositionalEmbeddingParams()
+        position_embedding_params: PositionalEmbeddingParams = field(factory=PositionalEmbeddingParams)
     
     def _make_network(self):
         if issubclass(self.params.position_embedding_params.pos_emb_cls, PositionalEncodingPermute2D):
@@ -670,7 +667,7 @@ class PositionAwareScanningConsistentActivationLayer(ScanningConsistentActivatio
             self.pos_emb = self.params.position_embedding_params.pos_emb_cls(self.actual_input_size)
         if self.params.position_embedding_params.cat_emb:
             self.actual_input_size = list(self.actual_input_size)
-            self.actual_input_size[0] += 1
+            self.actual_input_size[0] *= 2
             self.input_size = self.actual_input_size[0] * (self.kernel_size ** 2)
         return super()._make_network()
     
@@ -679,17 +676,18 @@ class PositionAwareScanningConsistentActivationLayer(ScanningConsistentActivatio
         if issubclass(self.params.position_embedding_params.pos_emb_cls, PositionalEncodingPermute2D):
             pe *= 0.05
         if self.params.position_embedding_params.cat_emb:
+            if pe.shape[0] == 1:
+                pe = pe.repeat(x.shape[0], 1, 1, 1)
             x = torch.cat((x, pe), dim=1)
         else:
             x = x + pe
         return super().forward(x, return_state_hist)
     
 class SequentialLayers(AbstractModel, CommonModelMixin):
+    @define(slots=False)
     class ModelParams(BaseParameters):
-        def __init__(self, cls):
-            super().__init__(cls)
-            self.layer_params: List[BaseParameters] = []
-            self.common_params: CommonModelParams = CommonModelParams()
+        layer_params: List[BaseParameters] = field(factory=list)
+        common_params: CommonModelParams = field(factory=CommonModelParams)
     
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -752,9 +750,10 @@ class SequentialLayers(AbstractModel, CommonModelMixin):
             return loss
 
 class GeneralClassifier(AbstractModel):
+    @define(slots=False)
     class ModelParams(BaseParameters):
-        feature_model_params: BaseParameters
-        classifier_params: BaseParameters
+        feature_model_params: BaseParameters = None
+        classifier_params: BaseParameters = None
     
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -831,13 +830,14 @@ class GeneralClassifier(AbstractModel):
         return tuple(outputs)
 
 class EyeModel(AbstractModel, CommonModelMixin):
+    @define(slots=False)
     class ModelParams(BaseParameters):
-        common_params: CommonModelParams
-        photoreceptor_params: BaseParameters
-        horizontal_cell_params: BaseParameters
-        bipolar_cell_params: BaseParameters
-        amacrine_cell_params: BaseParameters
-        ganglion_cell_params: BaseParameters
+        common_params: CommonModelParams = None
+        photoreceptor_params: BaseParameters = None
+        horizontal_cell_params: BaseParameters = None
+        bipolar_cell_params: BaseParameters = None
+        amacrine_cell_params: BaseParameters = None
+        ganglion_cell_params: BaseParameters = None
     
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -933,11 +933,8 @@ class ConvParams:
 class ConvEncoder(AbstractModel, CommonModelMixin):
     @define(slots=False)
     class ModelParams(BaseParameters):
-        common_params: CommonModelParams = None
-        conv_params: ConvParams = None
-        def __attrs_post_init__(self):
-            self.common_params: CommonModelParams = CommonModelParams()
-            self.conv_params: ConvParams = ConvParams()
+        common_params: CommonModelParams = field(factory=CommonModelParams)
+        conv_params: ConvParams = field(factory=ConvParams)
 
     def __init__(self, params: ModelParams) -> None:
         super(ConvEncoder, self).__init__(params)
@@ -995,3 +992,23 @@ class ConvEncoder(AbstractModel, CommonModelMixin):
         if return_logits:
             output = (logits,) + output
         return output
+
+class ConcurrentConsistencyOptimizationSequentialLayers(SequentialLayers):
+    def forward_step(self, x, updates, *fwd_args, **fwd_kwargs):
+        out = x
+        extra_outputs = []
+        for l in self.layers:
+            if self.training:
+                if isinstance(l, ConsistencyOptimizationMixin):
+                    _, loss, state_hist = l.compute_loss(out, None, return_logits=True, return_state_hist=True)
+                    update = state_hist[-1] - state_hist[0]
+                    out = (state_hist[0], [state_hist[0]])
+                else:
+                    out = l.compute_loss(out, None, return_logits=True)
+            else:
+                out = l(out, *fwd_args, **fwd_kwargs)
+                update = 0
+            if isinstance(out, tuple):
+                extra_outputs.append(out[1:])
+                out = out[0]
+        return out, update
