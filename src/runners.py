@@ -1,3 +1,4 @@
+from email.policy import strict
 import os
 import shutil
 from typing import List
@@ -5,9 +6,10 @@ from attrs import define
 from mllib.runners.base_runners import BaseRunner
 from mllib.runners.configs import BaseExperimentConfig
 from mllib.tasks.base_tasks import AbstractTask
+import torch
 
-from trainers import ActivityOptimizationParams, AdversarialTrainer, AdversarialParams, ConsistentActivationModelAdversarialTrainer, MultiAttackEvaluationTrainer
-from utils import write_pickle
+from adversarialML.biologically_inspired_models.src.trainers import ActivityOptimizationParams, AdversarialTrainer, AdversarialParams, ConsistentActivationModelAdversarialTrainer, MultiAttackEvaluationTrainer
+from adversarialML.biologically_inspired_models.src.utils import write_pickle
 
 @define(slots=False)
 class AdversarialExperimentConfig(BaseExperimentConfig):
@@ -21,8 +23,6 @@ class AdversarialExperimentRunner(BaseRunner):
     def get_experiment_dir(self, logdir, model_name, exp_name):
         def is_exp_complete(i):
             return os.path.exists(os.path.join(logdir, str(i), 'task.pkl'))
-        if self.load_model_from_ckp:
-            return self.ckp_dir
         exp_params = self.task.get_experiment_params()
         exp_name = f'-{exp_name}' if len(exp_name) > 0 else exp_name
         task_name = type(self.task).__name__
@@ -58,10 +58,27 @@ class AdversarialAttackBatteryRunner(AdversarialExperimentRunner):
         self.trainer = adv_trainer_params.cls(adv_trainer_params)
     
     def save_task(self):
+        if not os.path.exists(os.path.join(self.trainer.logdir, 'task.pkl')):
+            super().save_task()
         adv_config = self.task.get_experiment_params().adv_config
         write_pickle(adv_config, os.path.join(self.trainer.logdir, 'adv_config.pkl'))
 
 class ConsistentActivationAdversarialExperimentRunner(AdversarialExperimentRunner):
+    def create_model(self) -> torch.nn.Module:
+        p = self.task.get_model_params()
+        model: torch.nn.Module = p.cls(p)
+        if self.load_model_from_ckp:
+            src_model = self.load_model()
+            # model.load_state_dict(src_model.state_dict(), strict=False)
+            src_param_dict = {n:p for n,p in src_model.named_parameters()}
+            for n,p in model.named_parameters():
+                if (n in src_param_dict) and (src_param_dict[n].shape == p.shape):
+                    print(f'loading {n} from source model')
+                    p.data = src_param_dict[n].data
+                else:
+                    print(f'keeping {n} from model')
+        return model
+
     def create_trainer(self):
         trainer_params = self.create_trainer_params()
         adv_trainer_params = ConsistentActivationModelAdversarialTrainer.get_params()
