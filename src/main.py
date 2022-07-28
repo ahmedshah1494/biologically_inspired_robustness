@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from evaluation_tasks import get_adversarial_battery_task
 from runners import AdversarialAttackBatteryRunner, AdversarialExperimentRunner, ConsistentActivationAdversarialExperimentRunner
-from utils import get_model_checkpoint_dirs
+from utils import get_model_checkpoint_paths
 
 def load_model_from_ckpdir(d):
     files = os.listdir(d)
@@ -25,7 +25,7 @@ def get_task_class_from_str(s):
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--task', type=str, required=True)
-    parser.add_argument('--ckp_dir', type=str)
+    parser.add_argument('--ckp', type=str)
     parser.add_argument('--eval_only', action='store_true')
     parser.add_argument('--run_adv_attack_battery', action='store_true')
     args = parser.parse_args()
@@ -44,13 +44,15 @@ if __name__ == '__main__':
         runner_cls = AdversarialAttackBatteryRunner
     else:
         runner_cls = ConsistentActivationAdversarialExperimentRunner
-    if args.ckp_dir is not None:
-        ckp_dirs = get_model_checkpoint_dirs(args.ckp_dir)
+    if args.ckp is not None:
+        if os.path.isdir(args.ckp):
+            ckp_pths = get_model_checkpoint_paths(args.ckp)
+        elif os.path.isfile(args.ckp) and os.path.exists(args.ckp):
+            ckp_pths = [args.ckp]
     else:
-        ckp_dirs = [None]
-    for ckp_dir in ckp_dirs:
-        print(ckp_dir)
-        runner = runner_cls(task, ckp_dir=ckp_dir, load_model_from_ckp=(ckp_dir is not None))
+        ckp_pths = [None]
+    for ckp_pth in ckp_pths:
+        runner = runner_cls(task, ckp_pth=ckp_pth, load_model_from_ckp=(ckp_pth is not None))
         if args.eval_only:
             runner.create_trainer()
             runner.test()
