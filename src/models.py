@@ -9,8 +9,9 @@ from positional_encodings.torch_encodings import PositionalEncodingPermute2D
 
 from torch import dropout, nn
 import torch
+import torchvision
 
-from model_utils import _make_first_dim_last, _make_last_dim_first, merge_strings, mm, str_to_act_and_dact_fn, _compute_conv_output_shape
+from adversarialML.biologically_inspired_models.src.model_utils import _make_first_dim_last, _make_last_dim_first, merge_strings, mm, str_to_act_and_dact_fn, _compute_conv_output_shape
 
 @define(slots=False)
 class CommonModelParams:
@@ -33,6 +34,7 @@ class ConsistencyOptimizationParams:
     input_act_consistency: bool = False
     act_act_consistency: bool = True
     backward_dependence_type:str = 'Linear'
+    input_act_consistency_wt:float = 0.3
     no_act_after_update: bool = False
 
     max_train_time_steps: int = 1
@@ -43,6 +45,7 @@ class ConsistencyOptimizationParams:
     sparsity_coeff: float = 1.
 
     activate_logits: bool = True
+    act_opt_mask_p: float = 0.
 
 class CommonModelMixin(object):
     def add_common_params_to_name(self):
@@ -113,6 +116,8 @@ class ConsistencyOptimizationMixin(object):
         max_train_time_steps = self.params.consistency_optimization_params.max_train_time_steps
         max_test_time_steps = self.params.consistency_optimization_params.max_test_time_steps
         activate_logits = self.params.consistency_optimization_params.activate_logits
+        act_opt_mask_p = self.params.consistency_optimization_params.act_opt_mask_p
+        input_act_consistency_wt = self.params.consistency_optimization_params.input_act_consistency_wt
 
         self.input_act_consistency = input_act_consistency
         self.act_act_consistency = act_act_consistency
@@ -132,6 +137,8 @@ class ConsistencyOptimizationMixin(object):
         self.use_pt_optimizer = False
         self.truncate_act_opt_grad = False
         self.activate_logits = activate_logits
+        self.act_opt_mask_p = act_opt_mask_p
+        self.input_act_consistency_wt = input_act_consistency_wt
         
     def _get_activation_update_manual(self, act:torch.Tensor, W:torch.Tensor, b:torch.Tensor, normalize_by_act_norm=False):
         diag_mask = 1-torch.eye(W.shape[1], device=W.device)
@@ -209,8 +216,8 @@ class ConsistencyOptimizationMixin(object):
             if not (torch.isfinite(lat_act_update).all() and torch.isfinite(back_act_update).all()):
                 print(torch.norm(lat_act_update, p=2, dim=0).mean(), torch.norm(back_act_update, p=2, dim=0).mean())
             # back_act_update_norm = back_act_update.reshape(-1,back_act_update.shape[-1]).abs().max(0)[0]
-            # print(f'{i} max lat update norm = {lat_act_update_norm.max():.3e} max_back_update_norm={back_act_update_norm.max()}')
-        act_update_m = lat_act_update + 0.3*back_act_update
+            # print(f'{step_idx} max lat update norm = {lat_act_update_norm.max():.3e} max_back_update_norm={back_act_update_norm.max()}')
+        act_update_m = lat_act_update + self.input_act_consistency_wt*back_act_update
         loss = lat_loss + back_loss
 
         with torch.no_grad():
@@ -221,11 +228,12 @@ class ConsistencyOptimizationMixin(object):
             act_update_norm[act_update_norm == 0] = 1e-8
             scale = self.max_act_update_norm / act_update_norm
             scale = torch.min(scale, torch.ones_like(scale))
+            # print(scale.min(), act_update_norm.max(), self.max_act_update_norm)
         act_update_m = act_update_m * scale
         state = act - self.act_opt_step_size * act_update_m
         sparsity_update = self._get_sparsity_update(state)
         state = state - self.act_opt_step_size * sparsity_update
-        # print(step_idx, 'loss =', loss.detach().cpu().numpy().mean(), f'max update norm = {act_update_norm.max():.3e} (/{scale.min():.3f})', act_update_m.shape, scale.shape, (state>0).float().mean().cpu().detach().numpy(), time.time() - t0)
+        # print(f"{id(self)}", step_idx, 'loss =', loss.detach().cpu().numpy().mean(), f'max update norm = {act_update_norm.max():.3e} (/{scale.min():.3f})', act_update_m.shape, scale.shape, (state>0).float().mean().cpu().detach().numpy(), time.time() - t0)
         return state, loss, act_update_m
 
     def _optimize_activations(self, state_hist, x, W_lat, b_lat, W_back, b_back):
@@ -240,9 +248,13 @@ class ConsistencyOptimizationMixin(object):
         if self.use_pt_optimizer:
             dummy_var = torch.nn.Parameter(torch.zeros_like(state_hist[-1]), True)
             optimizer = torch.optim.SGD([dummy_var], lr=self.act_opt_step_size, momentum=0.9, nesterov=True)
+        if not hasattr(self, 'act_opt_mask'):
+            self.act_opt_mask = (torch.empty_like(state_hist[-1]).uniform_() >= self.act_opt_mask_p).float()
+        self.act_opt_mask = self.act_opt_mask.to(x.device)
         while (i < max_time_steps) or ((max_time_steps == -1) and (num_bad_steps < max_num_bad_steps)):
             state = state_hist[-1]
             new_state, loss, update = self._optimization_step(i, state, x, W_lat, b_lat, W_back, b_back)            
+            new_state = self.act_opt_mask * new_state + (1-self.act_opt_mask)*state
             if (loss < best_loss) and not torch.isclose(loss, prev_loss, rtol=0.001, atol=1e-4):
                 best_loss = loss
                 num_bad_steps = 0
@@ -573,7 +585,7 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
         act_update = self._reshape_output_for_input_act_consistency_optimization(act_update, act_shape)
         return act_update, loss
 
-    def _optimize_activations(self, state_hist, x, W_lat, b_lat, W_back, b_back):
+    def prepare_inputs_for_optimization(self, state_hist, x):
         fwd = state_hist[-1]
         bs, c, h, w = fwd.shape
         if self.spatial_act_act_consistency:
@@ -600,7 +612,20 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
                 x = x_unf.reshape(block_dim, -1)
             else:
                 state_hist[-1] = _make_first_dim_last(self._unfold_for_act_opt(state_hist[-1]))
+        return state_hist, x
+
+    def _optimize_activations(self, state_hist, x, W_lat, b_lat, W_back, b_back):
+        state_hist, x = self.prepare_inputs_for_optimization(state_hist, x)
         super()._optimize_activations(state_hist, x, W_lat, b_lat, W_back, b_back)
+
+    def reshape_state(self, s, orig_shape):
+        if self.input_act_consistency and (not self.window_input_act_consistency):
+            s = _make_last_dim_first(s)
+        else:
+            s = s.transpose(1,2).reshape(s.shape[0], -1)
+            s = self._fold_for_act_opt(s, orig_shape)
+            s = s.reshape(s.shape[0], s.shape[1], *(self.output_spatial_dims))
+        return s
 
     def forward(self, x, return_state_hist=False):
         if x.dim() == 3:
@@ -612,20 +637,13 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
         W_back = self.back_layer.weight if self.input_act_consistency else None
         b_back = self.back_layer.bias.reshape(-1, 1) if self.input_act_consistency else None
         self._optimize_activations(state_hist, x, W_lat, b_lat, W_back, b_back)
-        def reshape_state(s):
-            if self.input_act_consistency and (not self.window_input_act_consistency):
-                s = _make_last_dim_first(s)
-            else:
-                s = s.transpose(1,2).reshape(s.shape[0], -1)
-                s = self._fold_for_act_opt(s, _make_first_dim_last(fwd).shape)
-                s = s.reshape(s.shape[0], s.shape[1], *(self.output_spatial_dims))
-            return s
-        logits = reshape_state(state_hist[-1])
+        orig_shape = _make_first_dim_last(fwd).shape
+        logits = self.reshape_state(state_hist[-1], orig_shape)
         if self.activate_logits:
             logits = self.activation(logits)
             logits = self.dropout(logits)
         if return_state_hist:
-            state_hist = [reshape_state(s) for s in state_hist]
+            state_hist = [self.reshape_state(s, orig_shape) for s in state_hist]
             state_hist = torch.stack(state_hist, dim=1)
             return logits, state_hist
         else:
@@ -748,6 +766,70 @@ class SequentialLayers(AbstractModel, CommonModelMixin):
             return logits, loss
         else:
             return loss
+
+class ConcurrentConsistencyOptimizationSequentialLayers(SequentialLayers):
+    def _make_network(self):
+        super()._make_network()
+
+        act_opt_layers = [l for l in self.layers if isinstance(l, ConsistencyOptimizationMixin)]
+        if len(act_opt_layers) > 0:
+            self.max_train_time_steps = max([l.max_train_time_steps for l in act_opt_layers])
+            self.max_test_time_steps = max([l.max_test_time_steps for l in act_opt_layers])
+        for l in act_opt_layers:
+            l.max_train_time_steps = l.max_test_time_steps = 0
+        
+        self.states = [None]*len(self.layers)
+
+    def forward_step(self, step_idx, x, current_updates, *fwd_args, **fwd_kwargs):
+        out = x
+        extra_outputs = []
+        new_updates = []
+        states = [None]*len(self.layers)
+        for layer_idx, (l, u, prev_state) in enumerate(zip(self.layers, current_updates, states)):
+            update = 0
+            if self.training:
+                if isinstance(l, ScanningConsistentActivationLayer):
+                    _, loss, state_hist = l.compute_loss(out, None, return_logits=True, return_state_hist=True)
+                    state = state_hist[:,0]
+                    
+                    if prev_state is not None:
+                        W_lat = l.lat_layer.weight
+                        b_lat = l.lat_layer.bias.reshape(-1,1)
+                        W_back = l.back_layer.weight if l.input_act_consistency else None
+                        b_back = l.back_layer.bias.reshape(-1, 1) if l.input_act_consistency else None
+                        [prev_state], x = l.prepare_inputs_for_optimization([prev_state], out)
+                        new_prev_state, loss, update = l._optimization_step(step_idx, prev_state, x, W_lat, b_lat, W_back, b_back)
+                    
+                        orig_shape = _make_first_dim_last(state).shape
+                        prev_state = l.reshape_state(prev_state, orig_shape)
+                        new_prev_state = l.reshape_state(new_prev_state, orig_shape)
+                        update = (new_prev_state - prev_state)
+                        update_norm = update.reshape(-1,update.shape[-1]).abs().max(0)[0]
+
+                        state = state + update
+                    states[layer_idx] = state
+                    logits = l.dropout(l.activation(state))
+                    out = (logits, loss)
+                else:
+                    out = l.compute_loss(out, None, return_logits=True)
+            else:
+                out = l(out, *fwd_args, **fwd_kwargs)
+            new_updates.append(update)
+            if isinstance(out, tuple):
+                extra_outputs.append(out[1:])
+                out = out[0]
+        return out, new_updates, extra_outputs
+    
+    def forward(self, x, *fwd_args, **fwd_kwargs):
+        max_num_steps = self.max_train_time_steps if self.training else self.max_test_time_steps
+        out = x
+        updates = [0]*len(self.layers)
+        for i in range(max_num_steps):
+            out, updates, extra_outputs = self.forward_step(i, x, updates, *fwd_args, **fwd_kwargs)
+        if len(extra_outputs) > 0:
+            return out, extra_outputs
+        else:
+            return out
 
 class GeneralClassifier(AbstractModel):
     @define(slots=False)
@@ -992,23 +1074,3 @@ class ConvEncoder(AbstractModel, CommonModelMixin):
         if return_logits:
             output = (logits,) + output
         return output
-
-class ConcurrentConsistencyOptimizationSequentialLayers(SequentialLayers):
-    def forward_step(self, x, updates, *fwd_args, **fwd_kwargs):
-        out = x
-        extra_outputs = []
-        for l in self.layers:
-            if self.training:
-                if isinstance(l, ConsistencyOptimizationMixin):
-                    _, loss, state_hist = l.compute_loss(out, None, return_logits=True, return_state_hist=True)
-                    update = state_hist[-1] - state_hist[0]
-                    out = (state_hist[0], [state_hist[0]])
-                else:
-                    out = l.compute_loss(out, None, return_logits=True)
-            else:
-                out = l(out, *fwd_args, **fwd_kwargs)
-                update = 0
-            if isinstance(out, tuple):
-                extra_outputs.append(out[1:])
-                out = out[0]
-        return out, update
