@@ -1,7 +1,7 @@
 from enum import Enum, auto
 import os
 from typing import List, Type, Union
-from attrs import define
+from attrs import define, field
 from mllib.trainers.base_trainers import Trainer as _Trainer
 from mllib.utils.metric_utils import compute_accuracy, get_preds_from_logits
 from mllib.param import BaseParameters
@@ -11,21 +11,20 @@ import numpy as np
 import torchattacks
 
 from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper
-from models import ConsistencyOptimizationMixin
-from pruning import PruningMixin
-from utils import aggregate_dicts, merge_iterables_in_dict, write_json, write_pickle
+from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin
+from adversarialML.biologically_inspired_models.src.pruning import PruningMixin
+from adversarialML.biologically_inspired_models.src.utils import aggregate_dicts, merge_iterables_in_dict, write_json, write_pickle
 
 @define(slots=False)
 class AdversarialParams:
     training_attack_params: AbstractAttackConfig = None
     testing_attack_params: List[AbstractAttackConfig] = [None]
 
-class AdversarialTrainer(_Trainer, PruningMixin):
+class AdversarialTrainer(_Trainer, PruningMixin):    
+    @define(slots=False)    
     class AdversarialTrainerParams(BaseParameters):
-        def __init__(self, cls):
-            super().__init__(cls)
-            self.trainer_params: Type[_Trainer.TrainerParams] = _Trainer.TrainerParams(None)
-            self.adversarial_params: Type[AdversarialParams] = AdversarialParams
+        trainer_params: Type[_Trainer.TrainerParams] = field(factory=lambda: _Trainer.TrainerParams(None))
+        adversarial_params: Type[AdversarialParams] = field(factory=AdversarialParams)
 
     @classmethod
     def get_params(cls):
@@ -104,8 +103,8 @@ class AdversarialTrainer(_Trainer, PruningMixin):
     def train(self):
         metrics = super().train()
         val_acc = metrics['val_accuracy']
-        if val_acc > 0.12:
-            self.iterative_pruning_wrapper(0, self.l1_unstructured_pruning_with_retraining, 0.1)
+        # if val_acc > 0.12:
+        #     self.iterative_pruning_wrapper(0, self.l1_unstructured_pruning_with_retraining, 0.1)
     
     def save_training_logs(self, train_acc, test_accs):
         metrics = {
@@ -180,12 +179,13 @@ class ConsistentActivationModelAdversarialTrainer(AdversarialTrainer):
         if (epoch_idx < self.params.act_opt_params.num_warmup_epochs) and self.params.act_opt_params.act_opt_lr_warmup_schedule != ActivityOptimizationSchedule.CONST:
             for n,m in self.model.named_modules():
                 if n in self.max_act_opt_lrs:
+                    init_lr = min(self.params.act_opt_params.init_act_opt_lr, self.max_act_opt_lrs[n])
                     if self.params.act_opt_params.act_opt_lr_warmup_schedule == ActivityOptimizationSchedule.GEOM:
-                        m.act_opt_step_size = np.geomspace(self.params.act_opt_params.init_act_opt_lr, 
+                        m.act_opt_step_size = np.geomspace(init_lr, 
                                                             self.max_act_opt_lrs[n], 
                                                             self.params.act_opt_params.num_warmup_epochs)[epoch_idx]
                     if self.params.act_opt_params.act_opt_lr_warmup_schedule == ActivityOptimizationSchedule.LINEAR:
-                        m.act_opt_step_size = np.linspace(self.params.act_opt_params.init_act_opt_lr, 
+                        m.act_opt_step_size = np.linspace(init_lr, 
                                                             self.max_act_opt_lrs[n], 
                                                             self.params.act_opt_params.num_warmup_epochs)[epoch_idx]
                     print(n, m.act_opt_step_size)
@@ -193,6 +193,13 @@ class ConsistentActivationModelAdversarialTrainer(AdversarialTrainer):
     def train_loop(self, epoch_idx, post_loop_fn=None):
         self._update_act_opt_lrs(epoch_idx)
         return super().train_loop(epoch_idx, post_loop_fn)
+
+def compute_adversarial_success_rate(clean_preds, preds, labels, target_labels):
+    if (labels == target_labels).all():
+        adv_succ = ((clean_preds == labels) & (preds != labels)).astype(float).mean()
+    else:
+        adv_succ = (preds == target_labels).astype(float).mean()
+    return adv_succ
 
 class MultiAttackEvaluationTrainer(AdversarialTrainer):
     def __init__(self, params):
@@ -206,11 +213,19 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         new_outputs = aggregate_dicts(outputs)
         new_outputs = merge_iterables_in_dict(new_outputs)
         
+        labels = np.array(new_outputs['labels'])
         test_acc = {}
+        adv_succ = {}
         for k in new_outputs['preds'].keys():
-            acc = (np.array(new_outputs['preds'][k]) == np.array(new_outputs['labels'])).astype(float).mean()
+            target_labels = np.array(new_outputs['target_labels'][k])
+            preds = np.array(new_outputs['preds'][k])
+            clean_preds = np.array(new_outputs['preds'][sorted(new_outputs['preds'].keys())[0]])
+            acc = (preds == labels).astype(float).mean()
             test_acc[k] = acc
+            adv_succ[k] = compute_adversarial_success_rate(clean_preds, preds, labels, target_labels)
         new_outputs['test_acc'] = test_acc
+        new_outputs['adv_succ'] = adv_succ
+        write_json(adv_succ, os.path.join(self.logdir, 'adv_succ.json'))
         return new_outputs, metrics
 
     def test_step(self, batch, batch_idx):
@@ -218,6 +233,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         adv_x = {}
         test_loss = {}
         test_acc = {}
+        target_labels = {}
         for atk in self.testing_adv_attacks:
             if isinstance(atk, FoolboxAttackWrapper):
                 eps = atk.run_kwargs['epsilons'][0]
@@ -227,13 +243,17 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
                 raise NotImplementedError(f'{type(atk)} is not supported')
             atk_name = f"{atk.__class__.__name__}-{eps}"
 
-            x,y = self._maybe_attack_batch(batch, atk)
+            x,y = self._maybe_attack_batch(batch, atk if eps > 0 else None)
 
             logits, loss = self._get_outputs_and_loss(x, y)
             logits = logits.detach().cpu()
             
             y = y.detach().cpu()
             acc, _ = compute_accuracy(logits, y)
+            if isinstance(atk, torchattacks.attack.Attack) and atk._targeted:
+                y_tgt = atk._get_target_label(*batch)
+            else:
+                y_tgt = y
 
             preds = get_preds_from_logits(logits)
             loss = loss.mean().detach().cpu()
@@ -242,5 +262,6 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             adv_x[atk_name] = x.detach().cpu().numpy()
             test_loss[atk_name] = loss
             test_acc[atk_name] = acc
+            target_labels[atk_name] = y_tgt.detach().cpu().numpy().tolist()
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
-        return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x}, metrics
+        return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels}, metrics
