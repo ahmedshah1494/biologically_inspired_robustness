@@ -68,6 +68,7 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         adv_x = {}
         test_loss = {}
         test_acc = {}
+        test_logits = {}
         for eps, atk in zip(test_eps, self.testing_adv_attacks):
             x,y = self._maybe_attack_batch(batch, atk)
 
@@ -84,8 +85,9 @@ class AdversarialTrainer(_Trainer, PruningMixin):
             adv_x[eps] = x.detach().cpu().numpy()
             test_loss[eps] = loss
             test_acc[eps] = acc
+            test_logits[eps] = logits.numpy()
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
-        return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x}, metrics
+        return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'logits':test_logits}, metrics
     
     def test_epoch_end(self, outputs, metrics):
         outputs = aggregate_dicts(outputs)
@@ -113,15 +115,20 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         }
         write_json(metrics, os.path.join(self.logdir, self.metrics_filename))
 
-    def save_data_and_preds(self, preds, labels, inputs):
+    def save_data_and_preds(self, preds, labels, inputs, logits):
         d = {}
         for k in preds.keys():
             d[k] = {
                 'X': inputs[k],
                 'Y': labels,
-                'Y_pred': preds[k]
+                'Y_pred': preds[k],
+                'logits': logits[k]
             }
         write_pickle(d, os.path.join(self.logdir, self.data_and_pred_filename))
+    
+    def save_logs_after_test(self, train_metrics, test_outputs):
+        self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
+        self.save_data_and_preds(test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
 
     def test(self):
         test_outputs, test_metrics = self.test_loop(post_loop_fn=self.test_epoch_end)
@@ -130,10 +137,8 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         with torch.no_grad():
             _, train_metrics = self._batch_loop(self.train_step, self.train_loader, 0, logging=False)
         train_metrics = aggregate_dicts(train_metrics)
-
-        self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
-        self.save_data_and_preds(test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'])
-
+        self.save_logs_after_test(train_metrics, test_outputs)
+        
     def _log(self, logs, step):
         for k,v in logs.items():
             if isinstance(v, dict):
@@ -233,6 +238,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         adv_x = {}
         test_loss = {}
         test_acc = {}
+        test_logits = {}
         target_labels = {}
         for atk in self.testing_adv_attacks:
             if isinstance(atk, FoolboxAttackWrapper):
@@ -262,6 +268,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             adv_x[atk_name] = x.detach().cpu().numpy()
             test_loss[atk_name] = loss
             test_acc[atk_name] = acc
+            test_logits[atk_name] = logits.numpy()
             target_labels[atk_name] = y_tgt.detach().cpu().numpy().tolist()
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
-        return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels}, metrics
+        return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels, 'logits': test_logits}, metrics
