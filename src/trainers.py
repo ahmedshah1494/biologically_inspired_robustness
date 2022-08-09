@@ -40,7 +40,10 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         self.metrics_filename = 'metrics.json'
 
     def _get_attack_from_params(self, p: AbstractAttackConfig):
-        return p._cls(self.model, **(p.asdict()))
+        if p is not None:
+            if p.model is None:
+                p.model = self.model.eval()
+            return p._cls(p.model, **(p.asdict()))
 
     def _maybe_get_attacks(self, attack_params: Union[AbstractAttackConfig, List[AbstractAttackConfig]]):
         if attack_params is None:
@@ -63,7 +66,7 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         return super().train_step(batch, batch_idx)
 
     def test_step(self, batch, batch_idx):
-        test_eps = [p.eps for p in self.params.adversarial_params.testing_attack_params]
+        test_eps = [(p.eps if p is not None else 0.) for p in self.params.adversarial_params.testing_attack_params]
         test_pred = {}
         adv_x = {}
         test_loss = {}
@@ -91,7 +94,7 @@ class AdversarialTrainer(_Trainer, PruningMixin):
     
     def test_epoch_end(self, outputs, metrics):
         outputs = aggregate_dicts(outputs)
-        test_eps = [p.eps for p in self.params.adversarial_params.testing_attack_params]
+        test_eps = [(p.eps if p is not None else 0.) for p in self.params.adversarial_params.testing_attack_params]
         new_outputs = aggregate_dicts(outputs)
         new_outputs = merge_iterables_in_dict(new_outputs)
         
@@ -242,7 +245,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         target_labels = {}
         for atk in self.testing_adv_attacks:
             if isinstance(atk, FoolboxAttackWrapper):
-                eps = atk.run_kwargs['epsilons'][0]
+                eps = atk.run_kwargs.get('epsilons', [float('inf')])[0]
             elif isinstance(atk, torchattacks.attack.Attack):
                 eps = atk.eps
             else:
