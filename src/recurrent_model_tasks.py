@@ -1,15 +1,26 @@
 from copy import deepcopy
-from typing import Tuple
+from typing import List, Tuple
 from mllib.tasks.base_tasks import AbstractTask
 from mllib.runners.configs import BaseExperimentConfig
 from mllib.optimizers.configs import SGDOptimizerConfig, ReduceLROnPlateauConfig, AdamOptimizerConfig
-from models import ConvEncoder, GeneralClassifier, IdentityLayer
-from recurrent_models import BaseRecurrentCell, Conv2DSelfProjection, Conv2d, ConvTransposeUpscaler, Linear, LinearUpscaler, RecurrentModel
+from models import ConvEncoder, GeneralClassifier, IdentityLayer, SequentialLayers
+from recurrent_models import BaseRecurrentCell, Conv2DSelfProjection, Conv2d, ConvTransposeUpscaler, InputConcatenationLayer, Linear, LinearUpscaler, RecurrentModel
 from runners import AdversarialExperimentConfig
 
 from tasks import get_cifar10_params, set_SGD_params, set_adv_params, set_common_training_params
 from torch import nn
 import torchvision
+
+def get_input_concatenation_layer_params(dim, ninp):
+    catp: InputConcatenationLayer.ModelParams = InputConcatenationLayer.get_params()
+    catp.combiner_params.dim = dim
+    catp.combiner_params.num_inputs = ninp
+    return catp
+
+def get_sequential_model_params(layer_params: List):
+    p: SequentialLayers.ModelParams = SequentialLayers.get_params()
+    p.layer_params = layer_params
+    return p
 
 def create_conv_recurrent_cell_params():
     c: BaseRecurrentCell.ModelParams = BaseRecurrentCell.get_params()
@@ -28,6 +39,11 @@ def create_conv_recurrent_cell_params():
 
     cba: ConvTransposeUpscaler.ModelParams = ConvTransposeUpscaler.get_params()
     c.backward_act_params = cba
+
+    c.forward_input_combiner_params = get_input_concatenation_layer_params(1, 2)
+    c.lateral_input_combiner_params = get_input_concatenation_layer_params(1, 2)
+    c.backward_input_combiner_params = get_input_concatenation_layer_params(1, 2)
+
     return c, cf, cl, cb, cbh, cba
 
 def create_fc_recurrent_cell_params():
@@ -45,6 +61,10 @@ def create_fc_recurrent_cell_params():
     c.backward_update_params = cb
     c.hidden_backward_params = cbh
     c.backward_act_params = cba
+
+    c.forward_input_combiner_params = get_input_concatenation_layer_params(1, 2)
+    c.lateral_input_combiner_params = get_input_concatenation_layer_params(1, 2)
+    c.backward_input_combiner_params = get_input_concatenation_layer_params(1, 2)
 
     return c, cf, cl, cb, cbh, cba
 
@@ -111,6 +131,8 @@ class Cifar10AutoAugmentConv3LGELUModelTask(Cifar10Conv3LGELUModelTask):
 
 class Cifar10AutoAugmentConvRecurrentModel3L64UnitTask(AbstractTask):
     num_units = 64
+    input_size = [3, 32, 32]
+    num_steps = 5
     def get_dataset_params(self):
         p = get_cifar10_params(num_train=50_000)
         p.custom_transforms = (
@@ -138,10 +160,12 @@ class Cifar10AutoAugmentConvRecurrentModel3L64UnitTask(AbstractTask):
     
     def get_model_params(self):
         p: RecurrentModel.ModelParams = RecurrentModel.get_params()
-        p.recurrence_params.num_time_steps = 5
-        p.common_params.input_size = [3, 32, 32]
+        p.recurrence_params.num_time_steps = self.num_steps
+        p.common_params.input_size = self.input_size
         c1, c1f, c1l, c1b, c1bh, c1ba = create_conv_recurrent_cell_params()
-        set_conv_params(c1f, 3, self.num_units, 5, 3, 0)
+        c1f.common_params.input_size = self.input_size[:]
+        c1f.common_params.input_size[0] = 6
+        set_conv_params(c1f, 6, self.num_units, 5, 3, 0)
         set_conv_params(c1l, 2*self.num_units, self.num_units*25, 5, 5, 0)
         set_conv_params(c1b, 2*self.num_units, self.num_units*25, 5, 5, 0)
         c1bh.conv_params = deepcopy(c1f.conv_params)

@@ -11,14 +11,28 @@ from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
 from torch import nn
 
+def detach_and_move_to_cpu(l: List[torch.Tensor]):
+    return [x.detach().cpu() if isinstance(x, torch.Tensor) else x for x in l]
+
 class BaseRecurrentCell(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
+        # Parameters for the update networks. The output of the update networks are
+        # added to the hidden state in each time-step
         forward_update_params: BaseParameters = None
         lateral_update_params: BaseParameters = None
         backward_update_params: BaseParameters = None
+
+        # Parameters for upscaling the hidden state (either pre-act or post-act) to
+        # match the size of the input.
         backward_act_params: BaseParameters = None
         hidden_backward_params: BaseParameters = None
+
+        # Parameters for the combiner layers used to combine the inputs of the update networks.
+        forward_input_combiner_params: BaseParameters = None
+        lateral_input_combiner_params: BaseParameters = None
+        backward_input_combiner_params: BaseParameters = None
+
         use_layernorm: bool = True
         common_params: CommonModelParams = field(factory=CommonModelParams)
     
@@ -27,44 +41,68 @@ class BaseRecurrentCell(AbstractModel):
         self.params = params
         self._make_network()
 
-    def _make_network(self):
+    def _init_combiners(self):
+        self.forward_input_combiner: AbstractInputCombinationLayer = self.params.forward_input_combiner_params.cls(self.params.forward_input_combiner_params)
+        self.lateral_input_combiner: AbstractInputCombinationLayer = self.params.lateral_input_combiner_params.cls(self.params.lateral_input_combiner_params)
+        self.backward_input_combiner: AbstractInputCombinationLayer = self.params.backward_input_combiner_params.cls(self.params.backward_input_combiner_params)
+
+    def _init_update_nets(self):
+        # We need to set the input size for the forward_input_combiner here to take into account the effect of the input combiner.
+        # This is required especially in the case of convolutional networks because we pass a dummy input to estimate the output shape.
         self.params.forward_update_params.common_params.input_size = list(self.params.common_params.input_size)[:]
-        self.params.forward_update_params.common_params.input_size[0] *= 2
+        self.params.forward_update_params.common_params.input_size[self.forward_input_combiner.params.combiner_params.dim - 1] *= self.forward_input_combiner.mul_dim_factor
+        self.params.forward_update_params.common_params.input_size[self.forward_input_combiner.params.combiner_params.dim - 1] += self.forward_input_combiner.add_dim_factor
         self.forward_update_net = self.params.forward_update_params.cls(self.params.forward_update_params)
+        self.lateral_update_net = self.params.lateral_update_params.cls(self.params.lateral_update_params)
+        self.backward_update_net = self.params.backward_update_params.cls(self.params.backward_update_params)
 
-        hidden_size = self.forward_update_net(torch.rand(1,*(self.params.forward_update_params.common_params.input_size))).shape[1:]
-        self.init_hidden = nn.parameter.Parameter(torch.empty(*hidden_size).zero_(), requires_grad=False)
-        self.init_feedback = nn.parameter.Parameter(torch.empty(*hidden_size).zero_(), requires_grad=False)
+    def _init_upscaler(self, p, input_shape, output_shape):
+        if p is not None:
+            if isinstance(p, (ConvTransposeUpscaler.ModelParams, LinearUpscaler.ModelParams)):
+                p.target_shape = input_shape
+            p.common_params.input_shape = output_shape
+            upscaler = p.cls(p)
+            return upscaler
 
-        if self.params.use_layernorm:
-            self.layernorm = nn.LayerNorm(hidden_size)
-        
-        if self.params.backward_act_params is not None:
-            if isinstance(self.params.backward_act_params, (ConvTransposeUpscaler.ModelParams, LinearUpscaler.ModelParams)):
-                self.params.backward_act_params.target_shape = self.params.common_params.input_size
-                self.params.backward_act_params.input_shape = hidden_size
-            self.backward_act_net = self.params.backward_act_params.cls(self.params.backward_act_params)
-        
-        if self.params.hidden_backward_params is not None:
-            if isinstance(self.params.hidden_backward_params, (ConvTransposeUpscaler.ModelParams, LinearUpscaler.ModelParams)):
-                self.params.hidden_backward_params.target_shape = self.params.common_params.input_size
-                self.params.hidden_backward_params.input_shape = hidden_size
-            self.hidden_backward_net = self.params.hidden_backward_params.cls(self.params.hidden_backward_params)
+    def _init_backward_nets(self):
+        self.backward_act_net = self._init_upscaler(self.params.backward_act_params, self.params.common_params.input_size, self.hidden_size)
+        self.hidden_backward_net = self._init_upscaler(self.params.hidden_backward_params, self.params.common_params.input_size, self.hidden_size)
         
         if (self.params.backward_act_params is not None) and (self.params.hidden_backward_params is None):
             self.hidden_backward_net = self.backward_act_net
         if (self.params.backward_act_params is None) and (self.params.hidden_backward_params is not None):
             self.backward_act_net = self.hidden_backward_net
 
-        self.lateral_update_net = self.params.lateral_update_params.cls(self.params.lateral_update_params)
-        self.backward_update_net = self.params.backward_update_params.cls(self.params.backward_update_params)
+    def _make_network(self):
+        self._init_combiners()
+        self._init_update_nets()
+
+        self.hidden_size = self.forward_update_net(torch.rand(1,*(self.params.forward_update_params.common_params.input_size))).shape[1:]
+        self.init_hidden = nn.parameter.Parameter(torch.empty(*self.hidden_size).zero_(), requires_grad=False)
+        self.init_feedback = nn.parameter.Parameter(torch.empty(*self.hidden_size).zero_(), requires_grad=False)
+
+        self._init_backward_nets()
+
+        if self.params.use_layernorm:
+            self.layernorm = nn.LayerNorm(self.hidden_size)
+
         self.activation = self.params.common_params.activation()
     
     def _make_name(self):
         self.name = 'BaseRecurrentCell'
 
-    def combine_inputs(self, a, b):
-        return torch.cat((a,b), 1)
+    def _combine_inputs_for_update(self, x, h, a, a_b):
+        h_b = self.hidden_backward_net(h)
+        if hasattr(self, 'forward_input_combiner'):
+            fwdinp = self.forward_input_combiner(x, h_b)
+            latinp = self.lateral_input_combiner(a, h)
+            backinp = self.backward_input_combiner(a_b, h)
+        else:
+            fwdinp = torch.cat((x, h_b), dim=1)
+            latinp = torch.cat((a, h), dim=1)
+            backinp = torch.cat((a_b, h), dim=1)
+
+        return fwdinp, latinp, backinp
 
     def forward(self, x: torch.Tensor, h:torch.Tensor, a:torch.Tensor, a_b:torch.Tensor, return_hidden=True, return_backward_act=True):
         if h is None:
@@ -82,10 +120,10 @@ class BaseRecurrentCell(AbstractModel):
             a_b = a_b.unsqueeze(0)
             a_b = torch.repeat_interleave(a_b, h.shape[0], dim=0)
 
-        h_b = self.hidden_backward_net(h)
-        u_f = self.forward_update_net(self.combine_inputs(x, h_b))
-        u_l = self.lateral_update_net(self.combine_inputs(a, h))
-        u_b = self.backward_update_net(self.combine_inputs(a_b, h))
+        fwdinp, latinp, backinp = self._combine_inputs_for_update(x, h, a, a_b)
+        u_f = self.forward_update_net(fwdinp)
+        u_l = self.lateral_update_net(latinp)
+        u_b = self.backward_update_net(backinp)
         update = u_f + u_l + u_b
         h_new = h + u_f + u_l + u_b
         if self.params.use_layernorm:
@@ -101,9 +139,6 @@ class BaseRecurrentCell(AbstractModel):
             outputs = outputs + (a_up,)
         outputs = outputs if (len(outputs) > 1) else outputs[0]
         return outputs
-
-def detach_and_move_to_cpu(l: List[torch.Tensor]):
-    return [x.detach().cpu() if isinstance(x, torch.Tensor) else x for x in l]
 
 @define(slots=False)
 class RecurrenceParams:
@@ -168,7 +203,32 @@ class RecurrentModel(AbstractModel):
         if return_logits:
             return logits, loss
         else:
-            return loss            
+            return loss 
+
+class InputCombinationParams:
+    dim: int = -1
+    num_inputs:int = None
+
+class AbstractInputCombinationLayer(AbstractModel):
+    add_dim_factor = 0
+    mul_dim_factor = 1
+
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        combiner_params: InputCombinationParams = field(factory=InputCombinationParams)
+    
+    def _preprocess_inputs(self, *inputs):
+        return inputs
+
+class InputConcatenationLayer(AbstractInputCombinationLayer):    
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+        self.add_dim_factor = 0
+        self.mul_dim_factor = self.params.combiner_params.num_inputs
+
+    def forward(self, *inputs):
+        inputs = self._preprocess_inputs(*inputs)
+        return torch.cat(inputs, dim=self.params.combiner_params.dim)
 
 class Linear(AbstractModel, CommonModelMixin):
     @define(slots=False)
@@ -202,10 +262,9 @@ class ConvParams:
 class ConvTransposeUpscaler(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
+        common_params: CommonModelParams = field(factory=lambda: CommonModelParams(bias=False))
         conv_params: ConvParams = field(factory=ConvParams)
         target_shape: Union[torch.Size, Tuple[int]] = None
-        input_shape: Union[torch.Size, Tuple[int]] = None
-        use_bias: bool = False
     
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -218,10 +277,10 @@ class ConvTransposeUpscaler(AbstractModel):
         k = self.params.conv_params.kernel_size
         s = self.params.conv_params.stride
         p = self.params.conv_params.padding
-        d_in = np.array(self.params.input_shape[-2:])
+        d_in = np.array(self.params.common_params.input_shape[-2:])
         d_out = np.array(self.params.target_shape[-2:])
         op = d_out - ((d_in - 1) * np.array(s) - 2 * np.array(p) + np.array(k)-1 + 1)
-        self.upsample = nn.ConvTranspose2d(ic, oc, k, s, p, tuple(op), bias=self.params.use_bias)
+        self.upsample = nn.ConvTranspose2d(ic, oc, k, s, p, tuple(op), bias=self.params.common_params.bias)
     
     def forward(self, x):
         return self.upsample(x)
@@ -229,23 +288,22 @@ class ConvTransposeUpscaler(AbstractModel):
 class LinearUpscaler(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
+        common_params: CommonModelParams = field(factory=lambda: CommonModelParams(bias=False))
         target_shape: Union[torch.Size, Tuple[int]] = None
-        input_shape: Union[torch.Size, Tuple[int]] = None
-        use_bias: bool = False
-    
+
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
         self.params = params
         self._make_network()
     
     def _make_network(self):
-        indim = self.params.input_shape
+        indim = self.params.common_params.input_shape
         if np.iterable(indim):
             indim = np.prod(indim)
         outdim = self.params.target_shape
         if np.iterable(outdim):
             outdim = np.prod(outdim)
-        self.dense = nn.Linear(indim, outdim, bias=self.params.use_bias)
+        self.dense = nn.Linear(indim, outdim, bias=self.params.common_params.bias)
     
     def forward(self, x):
         out = self.dense(x.reshape(x.shape[0], -1))
@@ -264,7 +322,11 @@ class Conv2d(AbstractModel):
         self._make_network()
     
     def _make_network(self):
-        self.conv = nn.Conv2d(self.params.common_params.input_size[0], self.params.conv_params.out_channels, 
+        if self.params.common_params.input_size is not None:
+            ic = self.params.common_params.input_size[0]
+        else:
+            ic = self.params.conv_params.in_channels
+        self.conv = nn.Conv2d(ic, self.params.conv_params.out_channels, 
                                 self.params.conv_params.kernel_size, self.params.conv_params.stride, 
                                 self.params.conv_params.padding, self.params.conv_params.dilation)
 
@@ -296,3 +358,24 @@ class Conv2DSelfProjection(AbstractModel):
                                     stride=self.params.conv_params.stride)
         return proj_reshaped
 
+class UpscaleAndCombine(AbstractInputCombinationLayer):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        combiner_params: AbstractInputCombinationLayer.ModelParams = None
+        upscaler_params: BaseParameters = None
+    
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+        self._make_network()
+    
+    def _make_network(self):
+        self.upscaler = self.params.upscaler_params.cls(self.params.upscaler_params)
+        self.combiner = self.params.combiner_params.cls(self.params.combiner_params)
+    
+    def forward(self, a, b):
+        """
+            Upscales b to match the shape of a.
+        """
+        bup = self.upscaler(b)
+        comb = self.combiner(a,b)
+        return comb
