@@ -3,6 +3,7 @@ from typing import List, Tuple
 from mllib.tasks.base_tasks import AbstractTask
 from mllib.runners.configs import BaseExperimentConfig
 from mllib.optimizers.configs import SGDOptimizerConfig, ReduceLROnPlateauConfig, AdamOptimizerConfig
+from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, SupportedBackend
 from models import ConvEncoder, GeneralClassifier, IdentityLayer, SequentialLayers
 from recurrent_models import BaseRecurrentCell, Conv2DSelfProjection, Conv2d, ConvTransposeUpscaler, InputConcatenationLayer, Linear, LinearUpscaler, RecurrentModel
 from runners import AdversarialExperimentConfig
@@ -132,7 +133,9 @@ class Cifar10AutoAugmentConv3LGELUModelTask(Cifar10Conv3LGELUModelTask):
 class Cifar10AutoAugmentConvRecurrentModel3L64UnitTask(AbstractTask):
     num_units = 64
     input_size = [3, 32, 32]
-    num_steps = 5
+    num_train_steps = 5
+    num_test_steps = 5
+    alpha = 0.
     def get_dataset_params(self):
         p = get_cifar10_params(num_train=50_000)
         p.custom_transforms = (
@@ -156,11 +159,15 @@ class Cifar10AutoAugmentConvRecurrentModel3L64UnitTask(AbstractTask):
         set_adv_params(p, test_eps)
         dsp = self.get_dataset_params()
         p.exp_name = f'{dsp.max_num_train//1000}K'
+        if self.alpha > 0:
+            p.exp_name = f'alpha={self.alpha:.2f}-{p.exp_name}'
         return p
     
     def get_model_params(self):
         p: RecurrentModel.ModelParams = RecurrentModel.get_params()
-        p.recurrence_params.num_time_steps = self.num_steps
+        p.recurrence_params.train_time_steps = self.num_train_steps
+        p.recurrence_params.test_time_steps = self.num_test_steps
+        p.recurrence_params.truncated_loss_wt = self.alpha
         p.common_params.input_size = self.input_size
         c1, c1f, c1l, c1b, c1bh, c1ba = create_conv_recurrent_cell_params()
         c1f.common_params.input_size = self.input_size[:]
@@ -192,6 +199,24 @@ class Cifar10AutoAugmentConvRecurrentModel3L64UnitTask(AbstractTask):
         c4.use_layernorm = False
 
         p.cell_params = [c1, c2, c3, c4]
+        return p
+
+class Cifar10AutoAugmentConvRecurrentModel3L64Unit10StepTask(Cifar10AutoAugmentConvRecurrentModel3L64UnitTask):
+    num_train_steps = 10
+    num_test_steps = 20
+    alpha = 0.75
+
+class Cifar10AutoAugmentConvRecurrentModel3L64Unit5StepAdvTrainingTask(Cifar10AutoAugmentConvRecurrentModel3L64UnitTask):
+    alpha = 0.5
+    eps = 8/255
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
+        atk_p.eps = self.eps
+        atk_p.nsteps = 10
+        atk_p.step_size = self.eps/4
+        atk_p.random_start = True
+        p.adv_config.training_attack_params = atk_p
         return p
 
 class Cifar10AutoAugmentConvRecurrentModel3L128UnitTask(Cifar10AutoAugmentConvRecurrentModel3L64UnitTask):
