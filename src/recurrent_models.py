@@ -11,6 +11,9 @@ from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
 from torch import nn
 
+def detach_list_of_tensors(l: List[torch.Tensor]):
+    return [x.detach() if isinstance(x, torch.Tensor) else x for x in l]
+
 def detach_and_move_to_cpu(l: List[torch.Tensor]):
     return [x.detach().cpu() if isinstance(x, torch.Tensor) else x for x in l]
 
@@ -142,7 +145,9 @@ class BaseRecurrentCell(AbstractModel):
 
 @define(slots=False)
 class RecurrenceParams:
-    num_time_steps: int = 1
+    train_time_steps: int = 1
+    test_time_steps: int = 1
+    truncated_loss_wt: float = 0
 
 class RecurrentModel(AbstractModel):
     @define(slots=False)
@@ -181,25 +186,65 @@ class RecurrentModel(AbstractModel):
         new_feedbacks.append(None)
         return new_hidden_states, new_activations, new_feedbacks
 
+    def _run_all_steps(self, num_time_steps, inp, hidden_states, activations, feedbacks):
+        all_hidden_states = [hidden_states]
+        all_activations = [activations]
+        all_feedbacks = [feedbacks]
+        all_logits = []
 
-    def forward(self, x):
-        all_hidden_states = []
-        all_activations = []
-        all_feedbacks = []
-
-        inp = x
-        for t in range(self.params.recurrence_params.num_time_steps):
-            if t == 0:
-                hidden_states = activations = feedbacks = [None]*len(self.cells)
+        for t in range(num_time_steps):
             hidden_states, activations, feedbacks = self._single_step(inp, hidden_states, activations, feedbacks)
-            all_hidden_states.append(detach_and_move_to_cpu(hidden_states))
-            all_activations.append(detach_and_move_to_cpu(activations))
-            all_feedbacks.append(detach_and_move_to_cpu(feedbacks))        
-        return activations[-1]
+            all_logits.append(hidden_states[-1])
+            all_hidden_states.append(hidden_states)
+            all_activations.append(activations)
+            all_feedbacks.append(feedbacks)
+        return all_logits, all_hidden_states, all_activations, all_feedbacks
+
+    def forward(self, x, return_all_logits=False, return_hidden_acts=False, return_hidden_states=False, return_feedback_acts=False):        
+        hidden_states = activations = feedbacks = [None]*len(self.cells)
+        T = self.params.recurrence_params.train_time_steps if self.training else self.params.recurrence_params.test_time_steps
+        all_logits, all_hidden_states, all_activations, all_feedbacks = self._run_all_steps(T, x, hidden_states, activations, feedbacks)
+        
+        outputs = (all_logits[-1],)
+        if return_all_logits:
+            outputs += (all_logits,)
+        if return_hidden_acts:
+            outputs += (all_activations,)
+        if return_hidden_states:
+            outputs += (all_hidden_states,)
+        if return_feedback_acts:
+            outputs += (all_feedbacks,)
+            
+        if len(outputs) == 1:
+            outputs = outputs[0] 
+        return outputs
     
     def compute_loss(self, x, y, return_logits=True):
-        logits = self.forward(x)
-        loss = nn.functional.cross_entropy(logits, y)
+        # final_logits, all_logits, all_activations, all_hidden_states, all_feedbacks = self.forward(x, return_all_logits=True, return_hidden_acts=True, return_hidden_states=True, return_feedback_acts=True)
+        T = self.params.recurrence_params.train_time_steps if self.training else self.params.recurrence_params.test_time_steps
+        alpha = self.params.recurrence_params.truncated_loss_wt
+
+        hidden_states = activations = feedbacks = [None]*len(self.cells)
+        all_logits, all_hidden_states, all_activations, all_feedbacks = self._run_all_steps(T, x, hidden_states, activations, feedbacks)
+        full_pass_loss = nn.functional.cross_entropy(all_logits[-1], y) #sum([nn.functional.cross_entropy(logits, y) for logits in all_logits])
+
+        if alpha > 0 and self.training:        
+            n = np.random.randint(0, T)
+            k = np.random.randint(1, T-n+1)
+            trunc_all_logits = self._run_all_steps(k, x, detach_list_of_tensors(all_hidden_states[n]), detach_list_of_tensors(all_activations[n]), detach_list_of_tensors(all_feedbacks[n]))[0]
+            trunc_pass_loss = nn.functional.cross_entropy(trunc_all_logits[-1], y) #sum([nn.functional.cross_entropy(logits, y) for logits in trunc_all_logits])
+            loss = (1-alpha) * full_pass_loss + alpha*trunc_pass_loss
+        else:
+            loss = full_pass_loss        
+        logits = all_logits[-1]
+        if np.random.rand() < 1/100:
+            acc_ovr_time = [float((torch.argmax(l, dim=1) == y).float().mean().detach().cpu()) for l in all_logits]
+            if self.training:
+                trunc_acc_ovr_time = [float((torch.argmax(l, dim=1) == y).float().mean().detach().cpu()) for l in trunc_all_logits]
+            else:
+                trunc_acc_ovr_time = []
+            print(acc_ovr_time, trunc_acc_ovr_time)
+
         if return_logits:
             return logits, loss
         else:
