@@ -1,3 +1,4 @@
+from copy import deepcopy
 from turtle import forward
 from typing import List, Tuple
 import torch
@@ -8,6 +9,8 @@ from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
 from torch import nn
 import numpy as np
+
+from models import ConsistencyOptimizationParams, ConsistentActivationLayer
 
 class LayerNormLayer(AbstractModel):
     @define(slots=False)
@@ -90,9 +93,9 @@ class MixerBlock(AbstractModel):
         z = z.transpose(1,2)
         z = self.spatial_mlp(z)
         z = z.transpose(1,2)
-        z = self.layernorm2(x + z)
-        z = self.channel_mlp(z)
-        return x + z
+        x = x + z
+        z = self.layernorm2(x)
+        return x + self.channel_mlp(z)
 
 class MLPMixer(AbstractModel):
     @define(slots=False)
@@ -123,6 +126,9 @@ class MLPMixer(AbstractModel):
             *mixer_blocks
         )
         self.classifier = self.params.classifier_params.cls(self.params.classifier_params)
+        self.layernorm = nn.LayerNorm(x.shape[-1])
+        self.mean = nn.parameter.Parameter(torch.FloatTensor([0.4914, 0.4822, 0.4465]).reshape(1,3,1,1), requires_grad=False)
+        self.std = nn.parameter.Parameter(torch.FloatTensor([0.2470, 0.2435, 0.2616]).reshape(1,3,1,1), requires_grad=False)
     
     def _reshape_grid_to_patches(self, x):
         b, c, h, w = x.shape
@@ -131,9 +137,11 @@ class MLPMixer(AbstractModel):
         return z
     
     def forward(self, x):
+        x = (x - self.mean)/self.std
         x: torch.Tensor = self.patch_gen(x)
         z = self._reshape_grid_to_patches(x)
         z = self.mixer_blocks(z)
+        z = self.layernorm(z)
         z = z.mean(1)
         y = self.classifier(z)
         return y
