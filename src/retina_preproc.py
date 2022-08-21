@@ -1,5 +1,6 @@
 from copy import deepcopy
 from enum import Enum, auto
+from random import shuffle
 from turtle import forward
 from types import FunctionType
 from typing import Callable, List, Literal, Tuple, Union
@@ -13,6 +14,19 @@ from mllib.param import BaseParameters
 from attrs import define
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+from einops import rearrange
+
+def local_pixel_shuffle(img, kernel_size):
+    b, c, h, w = img.shape
+    kk = kernel_size**2
+    img_unf = nn.functional.unfold(img, kernel_size, stride=kernel_size)
+    b, c_kk, l = img_unf.shape
+    img_unf = rearrange(img_unf, 'b (c kk) l -> (b l c kk)', c=c)
+    perm_idx = np.concatenate([np.random.permutation(kk)+(i*kk) for i in range(b*c*l)], 0)
+    img_unf = img_unf[perm_idx]
+    img_unf = rearrange(img_unf, '(b l c kk) -> b (c kk) l', c=c, b=b, kk=kk)
+    img = nn.functional.fold(img_unf, (h, w), kernel_size, stride=kernel_size)
+    return img
 
 def gaussian_fn(M, std):
     n = torch.cat([torch.arange(M//2,-1,-1), torch.arange(1, M//2+1)])
@@ -36,7 +50,7 @@ def gaussian_blur_pytorch(img, kernel):
     # print(img.shape, padded_img.shape, blurred_img.shape)
     return blurred_img
 
-def _get_gaussian_filtered_image_and_density_mat_pytorch(img, isobox_w, avg_bins, loc_idx, kernels, kernel_width):
+def _get_gaussian_filtered_image_and_density_mat_pytorch(img, isobox_w, avg_bins, loc_idx, kernels, kernel_width, shuffle_pixels=True):
     filtered_img = torch.zeros_like(img)
     density_mat = torch.zeros_like(img)
     padded_img = nn.ReflectionPad2d(kernel_width//2)(img)
@@ -48,6 +62,8 @@ def _get_gaussian_filtered_image_and_density_mat_pytorch(img, isobox_w, avg_bins
         # filtered_crop = fimg[:,:, max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w]
         # crop = img[:,:, max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w]
         crop = padded_img[:,:, max(0,loc_idx_[0]-w-half_ks):loc_idx_[0]+w+half_ks][:,:,:,max(0,loc_idx_[1]-w-half_ks):loc_idx_[1]+w+half_ks]
+        # if shuffle_pixels and (w==max(isobox_w)):
+        #     crop = local_pixel_shuffle(crop, 4)
         # print(w, half_ks, padded_img.shape, crop.shape, max(0,loc_idx_[0]-w-half_ks), loc_idx_[0]+w+half_ks, max(0,loc_idx_[1]-w-half_ks), loc_idx_[1]+w+half_ks)
         filtered_crop = gaussian_blur_pytorch(crop, kern)
         filtered_img[:,:,max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w] = filtered_crop
@@ -162,7 +178,7 @@ class RetinaBlurFilter(AbstractModel):
 
         final_img = (rod_density_mat*gry_filtered_img + cone_density_mat*clr_filtered_img) / (rod_density_mat+cone_density_mat)
         final_img = torch.clamp(final_img, 0, 1.)
-        i = final_img[0].transpose(0,1).transpose(1,2).cpu().detach().numpy()
+        # i = final_img[0].transpose(0,1).transpose(1,2).cpu().detach().numpy()
         # plt.figure()
         # ax = plt.subplot(1,2,1)
         # ax.imshow(i)
@@ -174,6 +190,94 @@ class RetinaBlurFilter(AbstractModel):
         # plt.savefig('input.png')
         # plt.close()
         return final_img
+    
+    def compute_loss(self, x, y, return_logits=True):
+        out = self.forward(x)
+        logits = out
+        loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+class RetinaSampleFilter(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        input_shape: Union[int, List[int]] = None
+        cone_std: float = None
+        rod_std: float = None
+        max_rod_density: float = None
+        kernel_size: int = None
+        loc_mode: Literal['center', 'random_uniform'] = 'random_uniform'
+
+    def __init__(self, params, eps=1e-5) -> None:
+        super().__init__(params)
+        self.input_shape = self.params.input_shape
+        self.cone_std = self.params.cone_std
+        self.rod_std = self.params.rod_std
+        self.max_rod_density = self.params.max_rod_density
+        self.eps = eps
+
+        kernel_size = np.array(self.input_shape[1:])
+        max_dim = kernel_size.max()
+        x, y = np.meshgrid(np.arange(kernel_size[1])/max_dim,
+                            np.arange(kernel_size[0])/max_dim)
+        self.coords = np.dstack((y,x))
+
+    def get_cone_density_and_sample(self, dist):
+        p = dist_to_prob(dist, self.cone_std)
+        sample = np.random.binomial(1, p)
+        # sample = get_evenly_spaced_sample(p_coords)
+        sample = np.repeat(np.expand_dims(sample, 0), 3, 0)
+        p = torch.FloatTensor(p)
+        sample = torch.FloatTensor(sample)
+        return p, sample
+
+    def get_rod_density_and_sample(self, dist, cone_sample):
+        rod_density = (1 - dist_to_prob(dist, self.rod_std)) * self.max_rod_density
+        sample = np.random.binomial(1, rod_density)
+        # sample = get_evenly_spaced_sample(rod_density)
+        sample[cone_sample == 1] = 0
+        sample = np.repeat(np.expand_dims(sample, 0), 3, 0)
+        rod_density = torch.FloatTensor(rod_density)
+        sample = torch.FloatTensor(sample)
+        return rod_density, sample
+        
+
+    def _get_loc(self):
+        if self.params.loc_mode == 'center':
+            loc = (self.input_shape[1]//2, self.input_shape[1]//2)
+        elif self.params.loc_mode == 'random_uniform':
+            loc = (np.random.randint(0, self.input_shape[1]), np.random.randint(0, self.input_shape[2]))
+        else:
+            raise ValueError('params.loc_mode must be "center" or "random_uniform"')
+        return loc
+    
+    def __repr__(self):
+        return f'RetinaSampleFilter(cone_std={self.cone_std}, rod_std={self.rod_std}, max_rod_density={self.max_rod_density})'
+    
+    def forward(self, img, loc_idx=None):
+        if loc_idx is None:
+            loc_idx = self._get_loc()
+        loc_idx = np.array(loc_idx)
+        loc = loc_idx / max(self.input_shape[-2:])
+        dist = self.coords - loc + 1e-4
+        dist = np.max(np.abs(dist), 2)
+        cone_density, cone_sample_3d = self.get_cone_density_and_sample(dist)
+        rod_density, rod_sample_3d = self.get_rod_density_and_sample(dist, cone_sample_3d[0,:,:])
+
+        grey_img = torch.repeat_interleave(img.mean(1, keepdims=True), 3, 1)
+        fimg = (grey_img * rod_sample_3d.to(img.device)) + (img * cone_sample_3d.to(img.device))
+
+        # i = fimg[0].transpose(0,1).transpose(1,2).cpu().detach().numpy()
+        # plt.figure()
+        # ax = plt.subplot(1,2,1)
+        # ax.imshow(i)
+        # ax = plt.subplot(1,2,2)
+        # ax.imshow(img[0].transpose(0,1).transpose(1,2).cpu().detach().numpy())
+        # plt.savefig('input.png')
+        # plt.close()
+        return fimg
     
     def compute_loss(self, x, y, return_logits=True):
         out = self.forward(x)
