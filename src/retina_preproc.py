@@ -15,6 +15,7 @@ from attrs import define
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from einops import rearrange
+from positional_encodings.torch_encodings import PositionalEncodingPermute2D
 
 def local_pixel_shuffle(img, kernel_size):
     b, c, h, w = img.shape
@@ -287,3 +288,66 @@ class RetinaSampleFilter(AbstractModel):
             return logits, loss
         else:
             return loss
+
+class RetinaNonUniformPatchEmbedding(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        input_shape: Union[int, List[int]] = None
+        hidden_size: int = None
+        loc_mode: Literal['center', 'random_uniform'] = 'random_uniform'
+
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+        self.input_shape = np.array(self.params.input_shape)
+        n_isoboxes = int(np.log(min(self.params.input_shape[1:]) // 2) + 1 - 1e-5)
+        self.isobox_w = np.array([2**(i+1) for i in range(n_isoboxes)])
+        self.rec_flds = np.array([2**i for i in range(len(self.isobox_w) + 1)])
+        print(self.isobox_w, self.rec_flds)
+        self.convs = nn.ModuleList([nn.Conv2d(self.params.input_shape[0], self.params.hidden_size, rf, rf) for rf in self.rec_flds])
+        # self.pos_emb = PositionalEncodingPermute2D(3)
+    
+    def _get_loc(self):
+        if self.params.loc_mode == 'center':
+            loc = (self.input_shape[1]//2, self.input_shape[1]//2)
+        elif self.params.loc_mode == 'random_uniform':
+            offset = max(self.isobox_w)
+            loc = (np.random.randint(offset, self.input_shape[1]-offset), np.random.randint(offset, self.input_shape[2]-offset))
+        else:
+            raise ValueError('params.loc_mode must be "center" or "random_uniform"')
+        return loc
+    
+    def _get_name(self):
+        return f'RetinaNonUniformPatchEmbedding[hidden_size={self.params.hidden_size}, loc_mode={self.params.loc_mode}]'
+    
+    def forward(self, img, loc_idx=None):
+        # img = img + self.pos_emb(img)
+        if loc_idx is None:
+            loc_idx = self._get_loc()
+
+        def _get_crop(x, w):
+            return x[:,:, max(0,loc_idx[0]-(w-1)):loc_idx[0]+w+1][:,:,:,max(0,loc_idx[1]-(w-1)):loc_idx[1]+w+1]
+        
+        def _get_patch_emb(crop, conv, rf):
+            grey_crop = torch.repeat_interleave(crop.mean(1, keepdims=True), 3, 1)
+            crop = (1/rf)*crop + (1 - 1/rf)*grey_crop
+            pemb = conv(crop)
+            pemb = rearrange(pemb, 'b c h w -> b (h w) c')
+            return pemb
+
+        masked_img = img
+        # print(loc_idx_, padded_img.shape)
+        patch_embs = []
+        for w, conv, rf in zip(self.isobox_w, self.convs, self.rec_flds):
+            crop = _get_crop(masked_img, w)
+            pemb = _get_patch_emb(crop, conv, rf)
+            # print(crop.shape, pemb.shape)
+            patch_embs.append(pemb)
+            # print(pemb.shape)
+            # masked_img[:,:, max(0,loc_idx[0]-(w-1)):loc_idx[0]+w+1][:,:,:,max(0,loc_idx[1]-(w-1)):loc_idx[1]+w+1] *= 0
+        pemb = _get_patch_emb(masked_img, self.convs[-1], self.rec_flds[-1])
+        patch_embs.append(pemb)
+        patch_embs = torch.cat(patch_embs, 1)
+        # print(patch_embs.shape, img.shape)
+        # nzidx = torch.arange(0,patch_embs.shape[1])[(patch_embs[0] != 0).any(-1)]
+        # patch_embs = patch_embs[:, nzidx]
+        return patch_embs
