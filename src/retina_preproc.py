@@ -296,13 +296,21 @@ class RetinaNonUniformPatchEmbedding(AbstractModel):
         hidden_size: int = None
         loc_mode: Literal['center', 'random_uniform'] = 'random_uniform'
         mask_small_rf_region: bool = False
+        isobox_w: List[int] = None
+        rec_flds: List[int] = None
 
     def __init__(self, params: BaseParameters) -> None:
         super().__init__(params)
         self.input_shape = np.array(self.params.input_shape)
-        n_isoboxes = int(np.log(min(self.params.input_shape[1:]) // 2) + 1 - 1e-5)
-        self.isobox_w = np.array([2**(i+1) for i in range(n_isoboxes)])
-        self.rec_flds = np.array([2**i for i in range(len(self.isobox_w) + 1)])
+        if self.params.isobox_w is None:
+            n_isoboxes = int(np.log(min(self.params.input_shape[1:])) + 1 - 1e-5)
+            self.isobox_w = np.array([2**(i+1) for i in range(1,n_isoboxes)])
+        else:
+            self.isobox_w = np.array(self.params.isobox_w)
+        if self.params.rec_flds is None:
+            self.rec_flds = np.array([2**i for i in range(len(self.isobox_w) + 1)])
+        else:
+            self.rec_flds = np.array(self.params.rec_flds)
         print(self.isobox_w, self.rec_flds)
         self.convs = nn.ModuleList([nn.Conv2d(self.params.input_shape[0], self.params.hidden_size, rf, rf) for rf in self.rec_flds])
         # self.pos_emb = PositionalEncodingPermute2D(3)
@@ -311,28 +319,46 @@ class RetinaNonUniformPatchEmbedding(AbstractModel):
         if self.params.loc_mode == 'center':
             loc = (self.input_shape[1]//2, self.input_shape[2]//2)
         elif self.params.loc_mode == 'random_uniform':
-            offset = max(self.isobox_w)
+            offset = min(self.isobox_w)
             loc = (np.random.randint(offset, self.input_shape[1]-offset), np.random.randint(offset, self.input_shape[2]-offset))
         else:
             raise ValueError('params.loc_mode must be "center" or "random_uniform"')
         return loc
     
     def _get_name(self):
-        return f'RetinaNonUniformPatchEmbedding[hidden_size={self.params.hidden_size}, loc_mode={self.params.loc_mode}, {"masked=True" if self.params.mask_small_rf_region else ""}]'
+        return f'RetinaNonUniformPatchEmbedding[hidden_size={self.params.hidden_size}, loc_mode={self.params.loc_mode}{", masked=True" if self.params.mask_small_rf_region else ""}, isobox_w={(self.isobox_w).tolist()}, rec_flds={self.rec_flds.tolist()}]'
     
     def forward(self, img, loc_idx=None):
         # img = img + self.pos_emb(img)
         if loc_idx is None:
             loc_idx = self._get_loc()
 
-        def _get_crop_coords(w):
-            r_start, r_end = (max(0,loc_idx[0]-(w-1)), loc_idx[0]+w+1)
-            c_start, c_end = (max(0,loc_idx[1]-(w-1)), loc_idx[1]+w+1)
-            return r_start, r_end, c_start, c_end
+        def _get_top_left_coord(w):
+            w_l = w // 2
+            top_left = np.array([loc_idx[0]-w_l, loc_idx[1]-w_l])
+            return top_left
 
-        def _get_crop(x, w):
-            r_start, r_end, c_start, c_end = _get_crop_coords(w)
-            return x[:,:, r_start:r_end][:,:,:,c_start:c_end]
+        def _pad_crop(crop):
+            top_left = _get_top_left_coord(w)
+            top_right = top_left + np.array([0, (w - 1)])
+            bot_left = top_left + np.array([(w - 1), 0])
+            hpad = (max(0, -top_left[1]), max(0, top_right[1]-(self.input_shape[1] - 1)))
+            vpad = (max(0, -top_left[0]), max(0, bot_left[0]-(self.input_shape[2] - 1)))
+            padded_crop = nn.functional.pad(crop, hpad+vpad)
+            return padded_crop
+
+        def _get_or_set_crop(x:torch.Tensor, w:int, mode:Literal['get','set'], pad:bool=False, set_val:float = 0):
+            top_left = _get_top_left_coord(w)
+            pos_top_left = np.maximum(0, top_left)
+            if mode == 'set':
+                x[:,:, pos_top_left[0]:top_left[0]+w][:,:,:,pos_top_left[1]:top_left[1]+w] = set_val
+            elif mode == 'get':
+                crop = x[:,:, pos_top_left[0]:top_left[0]+w][:,:,:,pos_top_left[1]:top_left[1]+w]
+                if pad:
+                    crop = _pad_crop(crop)
+                return crop
+            else:
+                raise ValueError('mode={mode} but must be either "get" or "set"')
 
         def _get_patch_emb(crop, conv, rf):
             grey_crop = torch.repeat_interleave(crop.mean(1, keepdims=True), 3, 1)
@@ -340,21 +366,27 @@ class RetinaNonUniformPatchEmbedding(AbstractModel):
             pemb = conv(crop)
             pemb = rearrange(pemb, 'b c h w -> b (h w) c')
             return pemb
-
         masked_img = img
         patch_embs = []
+        crops = []
         for w, conv, rf in zip(self.isobox_w, self.convs, self.rec_flds):
-            crop = _get_crop(masked_img, w)
+            crop = _get_or_set_crop(masked_img, w, 'get', pad=True)
+            crops.append(crop)
             pemb = _get_patch_emb(crop, conv, rf)
-            
-            b = conv.bias.unsqueeze(0) if conv.bias is not None else 0
-            nzidx = torch.arange(0,pemb.shape[1])[(pemb[0] != b).any(-1)]
-            pemb = pemb[:, nzidx]
-            patch_embs.append(pemb)
             if self.params.mask_small_rf_region:
-                r_start, r_end, c_start, c_end = _get_crop_coords(w)
-                masked_img[:,:, r_start:r_end][:,:,:,c_start:c_end] *= 0
+                # b = conv.bias.unsqueeze(0) if conv.bias is not None else 0
+                # nzidx = torch.arange(0,pemb.shape[1])[(pemb[0] != b).any(-1)]
+                # pemb = pemb[:, nzidx]
+                _get_or_set_crop(masked_img, w, 'set', set_val=0.)
+            patch_embs.append(pemb)
         pemb = _get_patch_emb(masked_img, self.convs[-1], self.rec_flds[-1])
         patch_embs.append(pemb)
         patch_embs = torch.cat(patch_embs, 1)
+        # fig, axs = plt.subplots(1,len(crops)+2,figsize=(25, 5))
+        # axs[0].scatter([loc_idx[1]], [loc_idx[0]])
+        # axs[0].imshow(rearrange(img[0], 'c h w -> h w c').cpu().detach().numpy())
+        # for c, ax in zip(crops, axs[1:]):
+        #     ax.imshow(rearrange(c[0], 'c h w -> h w c').cpu().detach().numpy())
+        # axs[-1].imshow(rearrange(masked_img[0], 'c h w -> h w c').cpu().detach().numpy())
+        # plt.savefig('input.png')
         return patch_embs
