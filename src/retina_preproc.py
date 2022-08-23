@@ -295,6 +295,7 @@ class RetinaNonUniformPatchEmbedding(AbstractModel):
         input_shape: Union[int, List[int]] = None
         hidden_size: int = None
         loc_mode: Literal['center', 'random_uniform'] = 'random_uniform'
+        mask_small_rf_region: bool = False
 
     def __init__(self, params: BaseParameters) -> None:
         super().__init__(params)
@@ -308,7 +309,7 @@ class RetinaNonUniformPatchEmbedding(AbstractModel):
     
     def _get_loc(self):
         if self.params.loc_mode == 'center':
-            loc = (self.input_shape[1]//2, self.input_shape[1]//2)
+            loc = (self.input_shape[1]//2, self.input_shape[2]//2)
         elif self.params.loc_mode == 'random_uniform':
             offset = max(self.isobox_w)
             loc = (np.random.randint(offset, self.input_shape[1]-offset), np.random.randint(offset, self.input_shape[2]-offset))
@@ -317,16 +318,22 @@ class RetinaNonUniformPatchEmbedding(AbstractModel):
         return loc
     
     def _get_name(self):
-        return f'RetinaNonUniformPatchEmbedding[hidden_size={self.params.hidden_size}, loc_mode={self.params.loc_mode}]'
+        return f'RetinaNonUniformPatchEmbedding[hidden_size={self.params.hidden_size}, loc_mode={self.params.loc_mode}, {"masked=True" if self.params.mask_small_rf_region else ""}]'
     
     def forward(self, img, loc_idx=None):
         # img = img + self.pos_emb(img)
         if loc_idx is None:
             loc_idx = self._get_loc()
 
+        def _get_crop_coords(w):
+            r_start, r_end = (max(0,loc_idx[0]-(w-1)), loc_idx[0]+w+1)
+            c_start, c_end = (max(0,loc_idx[1]-(w-1)), loc_idx[1]+w+1)
+            return r_start, r_end, c_start, c_end
+
         def _get_crop(x, w):
-            return x[:,:, max(0,loc_idx[0]-(w-1)):loc_idx[0]+w+1][:,:,:,max(0,loc_idx[1]-(w-1)):loc_idx[1]+w+1]
-        
+            r_start, r_end, c_start, c_end = _get_crop_coords(w)
+            return x[:,:, r_start:r_end][:,:,:,c_start:c_end]
+
         def _get_patch_emb(crop, conv, rf):
             grey_crop = torch.repeat_interleave(crop.mean(1, keepdims=True), 3, 1)
             crop = (1/rf)*crop + (1 - 1/rf)*grey_crop
@@ -335,19 +342,19 @@ class RetinaNonUniformPatchEmbedding(AbstractModel):
             return pemb
 
         masked_img = img
-        # print(loc_idx_, padded_img.shape)
         patch_embs = []
         for w, conv, rf in zip(self.isobox_w, self.convs, self.rec_flds):
             crop = _get_crop(masked_img, w)
             pemb = _get_patch_emb(crop, conv, rf)
-            # print(crop.shape, pemb.shape)
+            
+            b = conv.bias.unsqueeze(0) if conv.bias is not None else 0
+            nzidx = torch.arange(0,pemb.shape[1])[(pemb[0] != b).any(-1)]
+            pemb = pemb[:, nzidx]
             patch_embs.append(pemb)
-            # print(pemb.shape)
-            # masked_img[:,:, max(0,loc_idx[0]-(w-1)):loc_idx[0]+w+1][:,:,:,max(0,loc_idx[1]-(w-1)):loc_idx[1]+w+1] *= 0
+            if self.params.mask_small_rf_region:
+                r_start, r_end, c_start, c_end = _get_crop_coords(w)
+                masked_img[:,:, r_start:r_end][:,:,:,c_start:c_end] *= 0
         pemb = _get_patch_emb(masked_img, self.convs[-1], self.rec_flds[-1])
         patch_embs.append(pemb)
         patch_embs = torch.cat(patch_embs, 1)
-        # print(patch_embs.shape, img.shape)
-        # nzidx = torch.arange(0,patch_embs.shape[1])[(patch_embs[0] != 0).any(-1)]
-        # patch_embs = patch_embs[:, nzidx]
         return patch_embs
