@@ -191,16 +191,21 @@ class Cifar10AutoAugmentwCenteredRetinaSamplerMLPMixer8LEvalTask(Cifar10AutoAugm
         rblur = p.layer_params[1]
         rblur.loc_mode = 'center'
         return p
+
+def _get_retina_nonuniform_patch_embedding_params(input_size, hidden_size, loc_mode='random_uniform', mask_small_rf_region=False, isobox_w=None, rec_flds=None):
+    return RetinaNonUniformPatchEmbedding.ModelParams(RetinaNonUniformPatchEmbedding, input_size, hidden_size, loc_mode, 
+                                                mask_small_rf_region, isobox_w, rec_flds)
 class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
     def _get_patch_params(self):
-        rblur = RetinaNonUniformPatchEmbedding.ModelParams(RetinaNonUniformPatchEmbedding, self.input_size, self.hidden_size)
-        # rblur.loc_mode = 'center'
+        # rblur = RetinaNonUniformPatchEmbedding.ModelParams(RetinaNonUniformPatchEmbedding, self.input_size, self.hidden_size)
+        rblur = _get_retina_nonuniform_patch_embedding_params(self.input_size, self.hidden_size)
         return rblur
 
     def get_experiment_params(self):
         p = super().get_experiment_params()
         for ap in p.adv_config.testing_attack_params:
             ap.eot_iter = 10
+        p.exp_name = 'PaddedCrops' + (f'-{p.exp_name}' if len(p.exp_name)>0 else '')
         return p
 
 class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask(Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixerTask):
