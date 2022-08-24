@@ -6,13 +6,14 @@ from mllib.runners.configs import BaseExperimentConfig
 from mllib.optimizers.configs import SGDOptimizerConfig, ReduceLROnPlateauConfig, AdamOptimizerConfig, CosineAnnealingWarmRestartsConfig, SequentialLRConfig, LinearLRConfig
 from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, SupportedBackend
 
-from adversarialML.biologically_inspired_models.src.models import ConvEncoder, ConsistentActivationLayer, ScanningConsistentActivationLayer, SequentialLayers
+from adversarialML.biologically_inspired_models.src.models import ConvEncoder, ConsistentActivationLayer, ScanningConsistentActivationLayer, SequentialLayers, IdentityLayer
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import MLPMixer, MixerBlock
-from adversarialML.biologically_inspired_models.src.mlp_mixer_models import ConsistentActivationMixerBlock, ConsistentActivationMixerMLP, FirstNExtractionClassifier, LinearLayer, MixerMLP
+from adversarialML.biologically_inspired_models.src.mlp_mixer_models import ConsistentActivationMixerBlock, ConsistentActivationMixerMLP, FirstNExtractionClassifier, LinearLayer, MixerMLP, SupervisedContrastiveMLPMixer
 from adversarialML.biologically_inspired_models.src.runners import AdversarialExperimentConfig, ConsistentActivationAdversarialExperimentConfig
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import UnfoldPatchExtractor
 from adversarialML.biologically_inspired_models.src.retina_preproc import RetinaBlurFilter, RetinaSampleFilter, RetinaNonUniformPatchEmbedding
 from mlp_mixer_models import NormalizationLayer
+from adversarialML.biologically_inspired_models.src.supconloss import TwoCropTransform
 
 from tasks import get_cifar10_params, set_SGD_params, set_adv_params, set_common_training_params
 from torch import nn
@@ -124,6 +125,22 @@ class Cifar10AutoAugmentMLPMixer8LTask(Cifar10AutoAugmentMLPMixerTask):
 
 class Cifar10AutoAugmentMLPMixer1LTask(Cifar10AutoAugmentMLPMixerTask):
     num_blocks = 1
+
+class Cifar10AutoAugmentSupConMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
+    def get_dataset_params(self):
+        p = super().get_dataset_params()
+        trainT, testT = p.custom_transforms
+        p.custom_transforms = (TwoCropTransform(trainT), testT)
+        return p
+
+    def get_model_params(self):
+        p = super().get_model_params()
+        p.projection_params = self._get_mlpc_params()
+        p.cls = SupervisedContrastiveMLPMixer
+        return p
+
+class Cifar10AutoAugmentSupConMLPMixer8LTask(Cifar10AutoAugmentSupConMLPMixerTask):
+    num_blocks = 8
 
 class Cifar10AutoAugmentwRetinaBlurMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
     def _get_patch_params(self):

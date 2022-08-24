@@ -13,6 +13,8 @@ from einops import rearrange
 
 from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin, ConsistencyOptimizationParams, ConsistentActivationLayer, ConvParams
 
+from adversarialML.biologically_inspired_models.src.supconloss import compute_supconloss
+
 class LayerNormLayer(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
@@ -172,23 +174,85 @@ class MLPMixer(AbstractModel):
             # x = x.transpose(1,2).transpose(2,3)
             # x = x.reshape(b,h*w,c)
         return x
-    
-    def forward(self, x):
+
+    def _get_patch_emb(self, x):
         if self.params.normalize_input:
             x = (x - self.mean)/self.std
         x: torch.Tensor = self.patch_gen(x)
         if isinstance(x, tuple):
             x = x[0]
         z = self._reshape_grid_to_patches(x)
+        return z
+    
+    def _run_mixer_blocks(self, z):
         z = self.layernorm(z)
         z = self.mixer_blocks(z)
+        return z
+    
+    def _get_feats(self, x):
+        z = self._get_patch_emb(x)
+        z = self._run_mixer_blocks(z)
         z = z.mean(1)
+        return z
+
+    def _run_classifier(self, z):
         y = self.classifier(z)
         return y
+
+    def forward(self, x):
+        z = self._get_feats(x)
+        y = self._run_classifier(z)
+        return y
+
+    # def forward(self, x):
+    #     if self.params.normalize_input:
+    #         x = (x - self.mean)/self.std
+    #     x: torch.Tensor = self.patch_gen(x)
+    #     if isinstance(x, tuple):
+    #         x = x[0]
+    #     z = self._reshape_grid_to_patches(x)
+    #     z = self.layernorm(z)
+    #     z = self.mixer_blocks(z)
+    #     z = z.mean(1)
+    #     y = self.classifier(z)
+    #     return y
     
     def compute_loss(self, x, y, return_logits=True):
         logits = self.forward(x)
         loss = nn.functional.cross_entropy(logits, y)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+class SupervisedContrastiveMLPMixer(MLPMixer):
+    @define(slots=False)
+    class ModelParams(MLPMixer.ModelParams):
+        projection_params: BaseParameters = None
+
+    def _make_network(self):
+        super()._make_network()
+        self.proj = self.params.projection_params.cls(self.params.projection_params)
+    
+    def _get_proj(self, z):
+        p = self.proj(z)
+        p = nn.functional.normalize(p)
+        return p
+    
+    def _get_feats(self, x):
+        z = super()._get_feats(x)
+        z = nn.functional.normalize(z)
+        return z
+    
+    def compute_loss(self, x, y, return_logits=True):
+        if x.dim() == 5:
+            x = rearrange(x, 'b n c h w -> (b n) c h w')
+        feat = self._get_feats(x)
+        proj = self._get_proj(feat)
+        logits = self._run_classifier(feat.detach())
+        loss = compute_supconloss(proj, logits, y)
+        logits = rearrange(logits, '(b n) d -> b n d', b=y.shape[0])
+        logits = logits.mean(1)
         if return_logits:
             return logits, loss
         else:
