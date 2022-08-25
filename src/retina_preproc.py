@@ -115,15 +115,41 @@ def dist_to_prob(d, scale):
     p_coords /= max(p_coords.max(), 1.)
     return p_coords
 
-class RetinaBlurFilter(AbstractModel):
+class AbstractRetinaFilter(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
         input_shape: Union[int, List[int]] = None
+        loc_mode: Literal['center', 'random_uniform'] = 'random_uniform'
+        batch_size: int = 128
+    
+    def _get_loc(self):
+        if self.params.loc_mode == 'center':
+            loc = (self.input_shape[1]//2, self.input_shape[1]//2)
+        elif self.params.loc_mode == 'random_uniform':
+            loc = (np.random.randint(0, self.input_shape[1]), np.random.randint(0, self.input_shape[2]))
+        else:
+            raise ValueError('params.loc_mode must be "center" or "random_uniform"')
+        return loc
+    
+    def _forward_batch(self, x, loc_idx):
+        pass
+
+    def forward(self, x, loc_idx=None):
+        batches = torch.split(x, self.params.batch_size)
+        filtered = [self._forward_batch(b, self._get_loc() if loc_idx is None else loc_idx) for b in batches]
+        if len(filtered) > 1:
+            filtered = torch.cat(filtered, dim=0)
+        else:
+            filtered = filtered[0]
+        return filtered
+
+class RetinaBlurFilter(AbstractRetinaFilter):
+    @define(slots=False)
+    class ModelParams(AbstractRetinaFilter.ModelParams):
         cone_std: float = None
         rod_std: float = None
         max_rod_density: float = None
         kernel_size: int = None
-        loc_mode: Literal['center', 'random_uniform'] = 'random_uniform'
 
     def __init__(self, params, eps=1e-5) -> None:
         super().__init__(params)
@@ -153,14 +179,6 @@ class RetinaBlurFilter(AbstractModel):
         self.clr_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.clr_avg_bins])
         self.gry_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.gry_avg_bins])
 
-    def _get_loc(self):
-        if self.params.loc_mode == 'center':
-            loc = (self.input_shape[1]//2, self.input_shape[1]//2)
-        elif self.params.loc_mode == 'random_uniform':
-            loc = (np.random.randint(0, self.input_shape[1]), np.random.randint(0, self.input_shape[2]))
-        else:
-            raise ValueError('params.loc_mode must be "center" or "random_uniform"')
-        return loc
     
     def __repr__(self):
         return f'RetinaBlurFilter(cone_std={self.cone_std}, rod_std={self.rod_std}, max_rod_density={self.max_rod_density}, kernel_size={self.kernel_size})'
@@ -170,9 +188,7 @@ class RetinaBlurFilter(AbstractModel):
         # print(s, p)
         return s
     
-    def forward(self, img, loc_idx=None):
-        if loc_idx is None:
-            loc_idx = self._get_loc()
+    def _forward_batch(self, img, loc_idx):
         grey_img = torch.repeat_interleave(img.mean(1, keepdims=True), 3, 1)
         gry_filtered_img, rod_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(grey_img, self.gry_isobox_w, self.gry_avg_bins, loc_idx, self.gry_kernels, self.kernel_size)
         clr_filtered_img, cone_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(img, self.clr_isobox_w, self.clr_avg_bins, loc_idx, self.clr_kernels, self.kernel_size)
@@ -289,12 +305,10 @@ class RetinaSampleFilter(AbstractModel):
         else:
             return loss
 
-class RetinaNonUniformPatchEmbedding(AbstractModel):
+class RetinaNonUniformPatchEmbedding(AbstractRetinaFilter):
     @define(slots=False)
-    class ModelParams(BaseParameters):
-        input_shape: Union[int, List[int]] = None
+    class ModelParams(AbstractRetinaFilter.ModelParams):
         hidden_size: int = None
-        loc_mode: Literal['center', 'random_uniform'] = 'random_uniform'
         mask_small_rf_region: bool = False
         isobox_w: List[int] = None
         rec_flds: List[int] = None
@@ -319,7 +333,7 @@ class RetinaNonUniformPatchEmbedding(AbstractModel):
         if self.params.loc_mode == 'center':
             loc = (self.input_shape[1]//2, self.input_shape[2]//2)
         elif self.params.loc_mode == 'random_uniform':
-            offset = min(self.isobox_w)
+            offset = max(self.isobox_w) // 2
             loc = (np.random.randint(offset, self.input_shape[1]-offset), np.random.randint(offset, self.input_shape[2]-offset))
         else:
             raise ValueError('params.loc_mode must be "center" or "random_uniform"')
@@ -328,7 +342,7 @@ class RetinaNonUniformPatchEmbedding(AbstractModel):
     def _get_name(self):
         return f'RetinaNonUniformPatchEmbedding[hidden_size={self.params.hidden_size}, loc_mode={self.params.loc_mode}{", masked=True" if self.params.mask_small_rf_region else ""}, isobox_w={(self.isobox_w).tolist()}, rec_flds={self.rec_flds.tolist()}]'
     
-    def forward(self, img, loc_idx=None):
+    def _forward_batch(self, img, loc_idx):
         # img = img + self.pos_emb(img)
         if loc_idx is None:
             loc_idx = self._get_loc()
