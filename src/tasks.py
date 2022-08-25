@@ -34,7 +34,7 @@ def set_common_training_params(p: BaseExperimentConfig):
 def set_adv_params(p: AdversarialExperimentConfig, test_eps):
     p.adv_config.training_attack_params = None
     def eps_to_attack(eps):
-        atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
+        atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
         atk_p.eps = eps
         atk_p.nsteps = 50
         atk_p.step_size = eps/40
