@@ -110,20 +110,3 @@ class SupConLoss(nn.Module):
         loss = loss.view(anchor_count, batch_size).mean()
 
         return loss
-
-def compute_supconloss(feat, logits, y, return_logits=True):
-    feat = rearrange(feat, '(b n) d -> b n d', b=y.shape[0])
-    logits = rearrange(logits, '(b n) d -> b n d', b=y.shape[0])
-
-    L = SupConLoss()
-    feat_norm = nn.functional.normalize(feat, dim=2)
-    loss1 = L(feat_norm, y)
-    
-    loss2 = 0.5*(nn.functional.cross_entropy(logits[:, 0], y) + nn.functional.cross_entropy(logits[:, 1], y))
-    loss = loss1 + loss2
-    # with torch.no_grad():
-    #     sim = torch.mm(feat_norm[:, 0], feat_norm[:, 0].T)
-    #     sim[range(sim.shape[0]), range(sim.shape[0])] = -float('inf')
-    #     pred = y[torch.argmax(sim, 1)]
-    #     logits = nn.functional.one_hot(pred)
-    return loss

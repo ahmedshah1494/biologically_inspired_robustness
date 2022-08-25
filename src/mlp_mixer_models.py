@@ -13,7 +13,7 @@ from einops import rearrange
 
 from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin, ConsistencyOptimizationParams, ConsistentActivationLayer, ConvParams
 
-from adversarialML.biologically_inspired_models.src.supconloss import compute_supconloss
+from adversarialML.biologically_inspired_models.src.supconloss import SupConLoss
 
 class LayerNormLayer(AbstractModel):
     @define(slots=False)
@@ -246,12 +246,23 @@ class SupervisedContrastiveMLPMixer(MLPMixer):
     
     def compute_loss(self, x, y, return_logits=True):
         if x.dim() == 5:
-            x = rearrange(x, 'b n c h w -> (b n) c h w')
+            x = rearrange(x, 'b n c h w -> (n b) c h w')
         feat = self._get_feats(x)
         proj = self._get_proj(feat)
         logits = self._run_classifier(feat.detach())
-        loss = compute_supconloss(proj, logits, y)
-        logits = rearrange(logits, '(b n) d -> b n d', b=y.shape[0])
+
+        feat = rearrange(feat, '(n b) d -> b n d', b=y.shape[0])
+        logits = rearrange(logits, '(n b) d -> b n d', b=y.shape[0])
+
+        L = SupConLoss()
+        loss1 = L(feat, y)
+        
+        loss2 = 0
+        for i in range(logits.shape[1]):
+            loss2 += nn.functional.cross_entropy(logits[:, i], y)
+        loss2 /= logits.shape[1]
+        loss = loss1 + loss2
+
         logits = logits.mean(1)
         if return_logits:
             return logits, loss
