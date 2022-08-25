@@ -11,13 +11,26 @@ class PruningMixin:
             with torch.no_grad():
                 _, metrics = self._batch_loop(self.train_step, self.train_loader, i, logging=False)
             return metrics['train_accuracy']
+        
+        def count_nz_params():
+            c = 0
+            for module in self.model.modules():
+                for name in ['weight', 'bias']:
+                    if hasattr(module, name) and getattr(module, name) is not None:
+                        W = getattr(module, name).data
+                        nz = ((W != 0) & (~torch.isnan(W))).int().sum().cpu().detach().numpy()
+                        c += nz
+            return c
+
         model = self.model
         orig_model = deepcopy(model)
         i = 0
         new_acc = old_acc = _get_train_acc()
         max_pruning_iters = sum([p.numel() for p in model.parameters()])
+        nz_params = count_nz_params()
         tol = 0.01
-        while (i == 0 or ((old_acc - new_acc < tol) and (i < max_pruning_iters))):
+        while (i == 0 or ((old_acc - new_acc < tol) and (i < max_pruning_iters)) and (nz_params > 0)):
+            print(nz_params, old_acc-new_acc)
             old_sd = deepcopy(model.state_dict())
             prune_step_fn(*args, **kwargs)
             old_acc = new_acc
@@ -28,8 +41,9 @@ class PruningMixin:
                 self.train_loop(i, self.train_epoch_end)
                 new_acc = _get_train_acc()
                 j += 1
+            nz_params = count_nz_params()
             i+=1
-        if (old_acc - new_acc > 0.01):
+        if (old_acc - new_acc > tol):
             if i == 1:
                 model = orig_model
             else:
