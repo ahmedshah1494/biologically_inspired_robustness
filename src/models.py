@@ -1,5 +1,4 @@
 import time
-from turtle import forward
 from typing import List, Type, Union
 from attrs import define, field
 from mllib.models.base_models import AbstractModel
@@ -15,8 +14,8 @@ from adversarialML.biologically_inspired_models.src.model_utils import _make_fir
 
 @define(slots=False)
 class CommonModelParams:
-    input_size: Union[int, List[int]] = 0
-    num_units: Union[int, List[int]] = 0
+    input_size: Union[int, List[int]] = None
+    num_units: Union[int, List[int]] = None
     activation: Type[nn.Module] = nn.ReLU
     bias: bool = True
     dropout_p: float = 0.
@@ -197,10 +196,13 @@ class ConsistencyOptimizationMixin(object):
         else:
             return 0
             
-    def _optimization_step(self, step_idx, state, x, W_lat, b_lat, W_back, b_back):
+    def _optimization_step(self, step_idx, state, x, W_lat, b_lat, W_back, b_back, activation=None):
         t0 = time.time()
         if (step_idx == 0) or (not self.no_act_after_update):
-            act = self.activation(state)
+            if (activation is not None) and isinstance(activation, nn.Module):
+                act = activation(state)
+            else:
+                act = self.activation(state)
         else:
             act = state
         lat_act_update = 0
@@ -236,7 +238,7 @@ class ConsistencyOptimizationMixin(object):
         # print(f"{id(self)}", step_idx, 'loss =', loss.detach().cpu().numpy().mean(), f'max update norm = {act_update_norm.max():.3e} (/{scale.min():.3f})', act_update_m.shape, scale.shape, (state>0).float().mean().cpu().detach().numpy(), time.time() - t0)
         return state, loss, act_update_m
 
-    def _optimize_activations(self, state_hist, x, W_lat, b_lat, W_back, b_back):
+    def _optimize_activations(self, state_hist, x, W_lat, b_lat, W_back, b_back, activation=None):
         max_time_steps = self.max_train_time_steps if self.training else self.max_test_time_steps
         i = 0
         prev_loss = torch.tensor(np.inf, device=state_hist[0].device)
@@ -249,12 +251,13 @@ class ConsistencyOptimizationMixin(object):
             dummy_var = torch.nn.Parameter(torch.zeros_like(state_hist[-1]), True)
             optimizer = torch.optim.SGD([dummy_var], lr=self.act_opt_step_size, momentum=0.9, nesterov=True)
         if not hasattr(self, 'act_opt_mask'):
-            self.act_opt_mask = (torch.empty_like(state_hist[-1]).uniform_() >= self.act_opt_mask_p).float()
-        self.act_opt_mask = self.act_opt_mask.to(x.device)
+            self.act_opt_mask = (torch.empty(state_hist[-1].shape[0],1).uniform_() >= self.act_opt_mask_p).float()
+            self.act_opt_mask = self.act_opt_mask.to(x.device)
         while (i < max_time_steps) or ((max_time_steps == -1) and (num_bad_steps < max_num_bad_steps)):
             state = state_hist[-1]
-            new_state, loss, update = self._optimization_step(i, state, x, W_lat, b_lat, W_back, b_back)            
-            new_state = self.act_opt_mask * new_state + (1-self.act_opt_mask)*state
+            new_state, loss, update = self._optimization_step(i, state, x, W_lat, b_lat, W_back, b_back, activation=activation)            
+            if self.act_opt_mask_p > 0:
+                new_state = self.act_opt_mask * new_state + (1-self.act_opt_mask)*state
             if (loss < best_loss) and not torch.isclose(loss, prev_loss, rtol=0.001, atol=1e-4):
                 best_loss = loss
                 num_bad_steps = 0
@@ -719,14 +722,16 @@ class SequentialLayers(AbstractModel, CommonModelMixin):
         self.name += f'-{self.params.common_params.dropout_p}Dropout'
     
     def _make_network(self):
-        # self.activation = self.params.common_params.activation()
-        # self.dropout = nn.Dropout(self.params.common_params.dropout_p)
-
-        x = torch.rand(1,*(self.params.common_params.input_size))
+        if self.params.common_params.input_size is not None:
+            input_size = self.params.common_params.input_size
+        else:
+            input_size = self.params.layer_params[0].common_params.input_size
+        x = torch.rand(1,*input_size)
         layers = []
         print(x.shape)
         for lp in self.params.layer_params:
-            lp.common_params.input_size = x.shape[1:]
+            if hasattr(lp, 'common_params'):
+                lp.common_params.input_size = x.shape[1:]
             l = lp.cls(lp)
             x = l(x)
             if isinstance(x, tuple):
@@ -746,9 +751,6 @@ class SequentialLayers(AbstractModel, CommonModelMixin):
             if isinstance(out, tuple):
                 extra_outputs.append(out[1:])
                 out = out[0]
-            # print(type(l), out.shape, out.grad_fn)
-            # out = self.activation(out)
-            # out = self.dropout(out)
         if len(extra_outputs) > 0:
             return out, extra_outputs
         else:
