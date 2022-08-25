@@ -20,6 +20,21 @@ class ConsistentActivationAdversarialExperimentConfig(AdversarialExperimentConfi
     act_opt_config: ActivityOptimizationParams = ActivityOptimizationParams()
 
 class AdversarialExperimentRunner(BaseRunner):
+    def create_model(self) -> torch.nn.Module:
+        p = self.task.get_model_params()
+        model: torch.nn.Module = p.cls(p)
+        if self.load_model_from_ckp:
+            src_model = self.load_model()
+            # model.load_state_dict(src_model.state_dict(), strict=False)
+            src_param_dict = {n:p for n,p in src_model.named_parameters()}
+            for n,p in model.named_parameters():
+                if (n in src_param_dict) and (src_param_dict[n].shape == p.shape):
+                    print(f'loading {n} from source model')
+                    p.data = src_param_dict[n].data
+                else:
+                    print(f'keeping {n} from model')
+        return model
+        
     def get_experiment_dir(self, logdir, model_name, exp_name):
         def is_exp_complete(i):
             return os.path.exists(os.path.join(logdir, str(i), 'task.pkl'))
@@ -50,6 +65,11 @@ class AdversarialExperimentRunner(BaseRunner):
         self.trainer = adv_trainer_params.cls(adv_trainer_params)
 
 class AdversarialAttackBatteryRunner(AdversarialExperimentRunner):
+    def get_experiment_dir(self, logdir, model_name, exp_name):
+        d = os.path.dirname(os.path.dirname(self.ckp_pth))
+        print(d)
+        return d
+
     def create_trainer(self):
         trainer_params = self.create_trainer_params()
         adv_trainer_params = MultiAttackEvaluationTrainer.get_params()
