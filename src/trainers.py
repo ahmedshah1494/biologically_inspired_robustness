@@ -1,6 +1,6 @@
 from enum import Enum, auto
 import os
-from typing import List, Type, Union
+from typing import List, Type, Union, Tuple
 from attrs import define, field
 from mllib.trainers.base_trainers import Trainer as _Trainer
 from mllib.utils.metric_utils import compute_accuracy, get_preds_from_logits
@@ -39,11 +39,15 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         self.data_and_pred_filename = 'data_and_preds.pkl'
         self.metrics_filename = 'metrics.json'
 
-    def _get_attack_from_params(self, p: AbstractAttackConfig):
+    def _get_attack_from_params(self, p: Union[AbstractAttackConfig, Tuple[str, AbstractAttackConfig]]):
+        if isinstance(p, tuple):
+            name, p = p
+        else:
+            name = None
         if p is not None:
             if p.model is None:
                 p.model = self.model.eval()
-            return p._cls(p.model, **(p.asdict()))
+            return name, p._cls(p.model, **(p.asdict()))
 
     def _maybe_get_attacks(self, attack_params: Union[AbstractAttackConfig, List[AbstractAttackConfig]]):
         if attack_params is None:
@@ -72,7 +76,13 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         test_loss = {}
         test_acc = {}
         test_logits = {}
-        for eps, atk in zip(test_eps, self.testing_adv_attacks):
+        for name, atk in self.testing_adv_attacks:
+            if isinstance(atk, FoolboxAttackWrapper):
+                eps = atk.run_kwargs.get('epsilons', [float('inf')])[0]
+            elif isinstance(atk, torchattacks.attack.Attack):
+                eps = atk.eps
+            else:
+                raise NotImplementedError(f'{type(atk)} is not supported')
             x,y = self._maybe_attack_batch(batch, atk)
 
             logits, loss = self._get_outputs_and_loss(x, y)
@@ -109,7 +119,10 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         metrics = super().train()
         val_acc = metrics['val_accuracy']
         # if val_acc > 0.12:
-        #     self.iterative_pruning_wrapper(0, self.l1_unstructured_pruning_with_retraining, 0.1)
+        #     self.prune()
+
+    def prune(self):
+        self.iterative_pruning_wrapper(0, self.l1_unstructured_pruning_with_retraining, 0.1)
     
     def save_training_logs(self, train_acc, test_accs):
         metrics = {
@@ -217,7 +230,6 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
 
     def test_epoch_end(self, outputs, metrics):
         outputs = aggregate_dicts(outputs)
-        test_eps = [p.eps for p in self.params.adversarial_params.testing_attack_params]
         new_outputs = aggregate_dicts(outputs)
         new_outputs = merge_iterables_in_dict(new_outputs)
         
@@ -243,14 +255,14 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         test_acc = {}
         test_logits = {}
         target_labels = {}
-        for atk in self.testing_adv_attacks:
+        for name, atk in self.testing_adv_attacks:
             if isinstance(atk, FoolboxAttackWrapper):
                 eps = atk.run_kwargs.get('epsilons', [float('inf')])[0]
             elif isinstance(atk, torchattacks.attack.Attack):
                 eps = atk.eps
             else:
                 raise NotImplementedError(f'{type(atk)} is not supported')
-            atk_name = f"{atk.__class__.__name__}-{eps}"
+            atk_name = f"{atk.__class__.__name__ if name is None else name}-{eps}"
 
             x,y = self._maybe_attack_batch(batch, atk if eps > 0 else None)
 

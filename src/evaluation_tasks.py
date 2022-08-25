@@ -11,11 +11,36 @@ def get_pgd_atk(eps):
     atk_p.random_start = True
     return atk_p
 
+def get_eot10_pgd_atk(eps):
+    p = get_pgd_atk(eps)
+    p.eot_iter = 10
+    return p
+
+def get_eot20_pgd_atk(eps):
+    p = get_pgd_atk(eps)
+    p.eot_iter = 20
+    return p
+
 def get_apgd_atk(eps):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
     atk_p.eps = eps
     atk_p.nsteps = 100
     return atk_p
+
+def get_eot10_apgd_atk(eps):
+    p = get_apgd_atk(eps)
+    p.eot_iter = 10
+    return p
+
+def get_eot20_apgd_atk(eps):
+    p = get_apgd_atk(eps)
+    p.eot_iter = 20
+    return p
+
+def get_eot50_apgd_atk(eps):
+    p = get_apgd_atk(eps)
+    p.eot_iter = 50
+    return p
 
 def get_square_atk(eps):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.SQUARELINF, SupportedBackend.TORCHATTACKS)
@@ -32,12 +57,19 @@ def get_hsj_atk(eps):
     atk_p.eps = eps
     return atk_p
 
+def get_boundary_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.BOUNDARY, SupportedBackend.FOOLBOX)
+    atk_p.steps = 1000
+    atk_p.run_params.epsilons = [eps]
+    return atk_p
+
 def get_transfered_atk(src_model_path, atkfn):
     src_model = torch.load(src_model_path)
     def _atkfn(eps):
         p = atkfn(eps)
         p.model = src_model
         return p
+    return _atkfn
 
 def get_adv_attack_params(atk_types):
     atktype_to_paramfn = {
@@ -63,8 +95,8 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
             adv_config = p.adv_config
             adv_config.training_attack_params = None
             atk_params = []
-            for atkfn in atk_param_fns:
-                atk_params += [atkfn(eps) for eps in test_eps]
+            for name, atkfn in atk_param_fns.items():
+                atk_params += [(name, atkfn(eps)) for eps in test_eps]
             adv_config.testing_attack_params = atk_params
             return p
     return AdversarialAttackBatteryEvalTask
