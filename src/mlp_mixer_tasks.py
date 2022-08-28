@@ -126,7 +126,7 @@ class Cifar10AutoAugmentMLPMixer8LTask(Cifar10AutoAugmentMLPMixerTask):
 class Cifar10AutoAugmentMLPMixer1LTask(Cifar10AutoAugmentMLPMixerTask):
     num_blocks = 1
 
-class Cifar10AutoAugmentSupConMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
+class SupConMLPMixerTaskMixin(object):
     def get_dataset_params(self):
         p = super().get_dataset_params()
         trainT, testT = p.custom_transforms
@@ -135,17 +135,18 @@ class Cifar10AutoAugmentSupConMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
 
     def get_model_params(self):
         p = super().get_model_params()
+        p = SupervisedContrastiveMLPMixer.ModelParams(**(p.asdict(recurse=False)))
         p.projection_params = self._get_mlpc_params()
         p.cls = SupervisedContrastiveMLPMixer
         return p
 
-class Cifar10AutoAugmentSupConMLPMixer8LTask(Cifar10AutoAugmentSupConMLPMixerTask):
-    num_blocks = 8
+class Cifar10AutoAugmentSupConMLPMixer8LTask(SupConMLPMixerTaskMixin, Cifar10AutoAugmentMLPMixer8LTask):
+    pass
 
 class Cifar10AutoAugmentwRetinaBlurMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
     def _get_patch_params(self):
         cnn = super()._get_patch_params()
-        rblur = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, 0.12, 0.06, 0.12, 9)
+        rblur = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, cone_std=0.12, rod_std=0.06, max_rod_density=0.12, kernel_size=9)
         norm = NormalizationLayer.ModelParams(NormalizationLayer, [0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616])
         p: SequentialLayers.ModelParams = SequentialLayers.get_params()
         p.common_params.input_size = self.input_size
@@ -166,6 +167,9 @@ class Cifar10AutoAugmentwRetinaBlurMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
 
 class Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask(Cifar10AutoAugmentwRetinaBlurMLPMixerTask):
     num_blocks = 8
+
+class Cifar10AutoAugmentwRetinaBlurSupConMLPMixer8LTask(SupConMLPMixerTaskMixin, Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask):
+    pass
 
 class Cifar10AutoAugmentwCenteredRetinaBlurMLPMixer8LEvalTask(Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask):
     def _get_patch_params(self):
@@ -209,9 +213,9 @@ class Cifar10AutoAugmentwCenteredRetinaSamplerMLPMixer8LEvalTask(Cifar10AutoAugm
         rblur.loc_mode = 'center'
         return p
 
-def _get_retina_nonuniform_patch_embedding_params(input_size, hidden_size, loc_mode='random_uniform', mask_small_rf_region=False, isobox_w=None, rec_flds=None):
-    return RetinaNonUniformPatchEmbedding.ModelParams(RetinaNonUniformPatchEmbedding, input_size, hidden_size, loc_mode, 
-                                                mask_small_rf_region, isobox_w, rec_flds)
+def _get_retina_nonuniform_patch_embedding_params(input_shape, hidden_size, loc_mode='random_uniform', mask_small_rf_region=False, isobox_w=None, rec_flds=None):
+    return RetinaNonUniformPatchEmbedding.ModelParams(RetinaNonUniformPatchEmbedding, input_shape=input_shape, hidden_size=hidden_size, loc_mode=loc_mode, 
+                                                mask_small_rf_region=mask_small_rf_region, isobox_w=isobox_w, rec_flds=rec_flds)
 class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
     def _get_patch_params(self):
         # rblur = RetinaNonUniformPatchEmbedding.ModelParams(RetinaNonUniformPatchEmbedding, self.input_size, self.hidden_size)
@@ -227,6 +231,9 @@ class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixerTask(Cifar10AutoA
 
 class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask(Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixerTask):
     num_blocks = 8
+
+class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingSupConMLPMixer8LTask(SupConMLPMixerTaskMixin, Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask):
+    pass
 
 class Cifar10AutoAugmentwCenteredRetinaNonUniformPatchEmbeddingMLPMixer8LEvalTask(Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask):
     def _get_patch_params(self):
