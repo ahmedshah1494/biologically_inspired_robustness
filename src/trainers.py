@@ -9,11 +9,12 @@ from numpy import iterable
 import torch
 import numpy as np
 import torchattacks
+from einops import rearrange
 
-from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper
+from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper, FoolboxCWL2AttackWrapper
 from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin
 from adversarialML.biologically_inspired_models.src.pruning import PruningMixin
-from adversarialML.biologically_inspired_models.src.utils import aggregate_dicts, merge_iterables_in_dict, write_json, write_pickle
+from adversarialML.biologically_inspired_models.src.utils import aggregate_dicts, merge_iterables_in_dict, write_json, write_pickle, load_json, recursive_dict_update, load_pickle
 
 @define(slots=False)
 class AdversarialParams:
@@ -35,6 +36,8 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         print(self.model)
         self.params = params
         self.training_adv_attack = self._maybe_get_attacks(params.adversarial_params.training_attack_params)
+        if isinstance(self.training_adv_attack, tuple):
+            self.training_adv_attack = self.training_adv_attack[1]
         self.testing_adv_attacks = self._maybe_get_attacks(params.adversarial_params.testing_attack_params)
         self.data_and_pred_filename = 'data_and_preds.pkl'
         self.metrics_filename = 'metrics.json'
@@ -62,7 +65,13 @@ class AdversarialTrainer(_Trainer, PruningMixin):
     def _maybe_attack_batch(self, batch, adv_attack):
         x,y = batch
         if adv_attack is not None:
-            x = adv_attack(x, y)
+            if x.dim() == 5:
+                y_ = torch.cat([y]*x.shape[1], 0)
+                x = rearrange(x, 'b n c h w -> (b n) c h w')
+                x = adv_attack(x, y_)
+                x = rearrange(x, '(b n) c h w -> b n c h w', b = len(y))
+            else:
+                x = adv_attack(x, y)
         return x,y
 
     def train_step(self, batch, batch_idx):
@@ -150,8 +159,9 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         test_outputs, test_metrics = self.test_loop(post_loop_fn=self.test_epoch_end)
         print('test metrics:')
         print(test_metrics)
-        with torch.no_grad():
-            _, train_metrics = self._batch_loop(self.train_step, self.train_loader, 0, logging=False)
+        _, train_metrics = self._batch_loop(self.val_step, self.train_loader, 0, logging=False)
+        for k in train_metrics:
+            train_metrics[k.replace('val', 'train')] = train_metrics.pop(k)
         train_metrics = aggregate_dicts(train_metrics)
         self.save_logs_after_test(train_metrics, test_outputs)
         
@@ -228,6 +238,32 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         self.metrics_filename = 'adv_metrics.json'
         self.data_and_pred_filename = 'adv_data_and_preds.pkl'
 
+    def save_training_logs(self, train_acc, test_accs):
+        outfile = os.path.join(self.logdir, self.metrics_filename)
+        if os.path.exists(outfile):
+            self.metrics_filename = '.'+self.metrics_filename
+            super().save_training_logs(train_acc, test_accs)
+            metrics = load_json(os.path.join(self.logdir, self.metrics_filename))
+            self.metrics_filename = self.metrics_filename[1:]
+            old_metrics = load_json(outfile)
+            recursive_dict_update(old_metrics, metrics)
+            write_json(metrics, outfile)
+        else:
+            super().save_training_logs(train_acc, test_accs)
+    
+    def save_data_and_preds(self, preds, labels, inputs, logits):
+        outfile = os.path.join(self.logdir, self.data_and_pred_filename)
+        if os.path.exists(outfile):
+            self.data_and_pred_filename = '.'+self.data_and_pred_filename
+            super().save_data_and_preds(preds, labels, inputs, logits)
+            metrics = load_pickle(os.path.join(self.logdir, self.data_and_pred_filename))
+            self.data_and_pred_filename = self.data_and_pred_filename[1:]
+            old_metrics = load_pickle(outfile)
+            recursive_dict_update(old_metrics, metrics)
+            write_pickle(metrics, outfile)
+        else:
+            super().save_data_and_preds(preds, labels, inputs, logits)
+
     def test_epoch_end(self, outputs, metrics):
         outputs = aggregate_dicts(outputs)
         new_outputs = aggregate_dicts(outputs)
@@ -256,7 +292,9 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         test_logits = {}
         target_labels = {}
         for name, atk in self.testing_adv_attacks:
-            if isinstance(atk, FoolboxAttackWrapper):
+            if isinstance(atk, FoolboxCWL2AttackWrapper):
+                eps = atk.attack.confidence
+            elif isinstance(atk, FoolboxAttackWrapper):
                 eps = atk.run_kwargs.get('epsilons', [float('inf')])[0]
             elif isinstance(atk, torchattacks.attack.Attack):
                 eps = atk.eps
