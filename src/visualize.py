@@ -19,7 +19,7 @@ from scipy.stats.mstats import f_oneway
 from matplotlib.animation import FuncAnimation
 import torch
 from tqdm import tqdm
-from utils import lazy_load_json, lazy_load_pickle, load_json, load_logs, aggregate_metrics
+from adversarialML.biologically_inspired_models.src.utils import _compute_area_under_curve, load_logs, get_eps_from_logdict_key
 
 def get_model_from_state_dict(state_dict, args, d, num_classes):
     model = get_model(args.model_config, d, num_classes)
@@ -183,34 +183,44 @@ def plot_train_v_test_accuracy_multimodel(logdicts, outdir):
     data = []
     for model_name, logdict in logdicts.items():
         test_acc = logdict['metrics']['test_accs']
-        # print(model_name, test_acc[0.0])
+        # best_model_idx = np.argmax(test_acc[min(test_acc.keys())])
         for eps, accs in test_acc.items():
+            atkname, eps = get_eps_from_logdict_key(eps)
+            # accs = [accs[best_model_idx]]
             for a in accs:
                 r = {
                     'model_name': model_name,
                     'test_eps': float(eps),
-                    'acc': a
+                    'acc': a,
+                    'attack': atkname
                 }
                 data.append(r)
     df = pd.DataFrame(data)
     plt.figure()
-    sns.relplot(x='test_eps', y='acc', hue='model_name', data=df, kind='line')
-    plt.grid()
+    sns.set_style("whitegrid")
+    sns.relplot(x='test_eps', y='acc', hue='model_name', col='attack', data=df, kind='line')
     plt.savefig(os.path.join(outdir, 'test_acc_line.png'))
 
 def plot_test_accuracy_auc_multimodel(logdicts, outdir, plot_confint=False):
     data = []
     for model_name, logdict in logdicts.items():
         test_acc = logdict['metrics']['test_accs']
-        test_eps = np.array(list(test_acc.keys()))
-        accs = np.array(list(test_acc.values())).T
-        areas = np.array([_compute_area_under_curve(test_eps, a) for a in accs])            
-        for a in areas:
-            r = {
-                'model_name': model_name,
-                'auc': a
-            }
-            data.append(r)
+        # test_eps = np.array([get_eps_from_logdict_key(k) for k in test_acc.keys()])
+        atk2eps = {}
+        for k in test_acc.keys():
+            atkname, eps = get_eps_from_logdict_key(k)
+            atk2eps.setdefault(atkname, []).append(eps)
+        for atkname, test_eps in atk2eps.items():
+            # accs = np.array(list(test_acc.values())).T
+            accs = np.array([test_acc[f"{atkname}{'' if atkname == '' else '-'}{eps}"] for eps in test_eps]).T
+            areas = np.array([_compute_area_under_curve(test_eps, a) for a in accs])            
+            for a in areas:
+                r = {
+                    'attack': atkname,
+                    'model_name': model_name,
+                    'auc': a
+                }
+                data.append(r)
     df = pd.DataFrame(data)
     if plot_confint:
         plt_fn = sns.barplot
@@ -220,7 +230,8 @@ def plot_test_accuracy_auc_multimodel(logdicts, outdir, plot_confint=False):
         plt_type = 'box'
 
     plt.figure(figsize=(15,len(logdicts)))
-    plt_fn(x='auc', y='model_name', data=df)
+    g = plt_fn(x='auc', y='attack', hue='model_name', data=df)
+    g.legend(loc='upper center', bbox_to_anchor=(0.5, 1.5), ncol=1)
     plt.tight_layout()
     plt.grid()
     plt.savefig(os.path.join(outdir, f'test_acc_auc_{plt_type}.png'))
@@ -298,6 +309,67 @@ def plot_adv_img_and_logits(logdict, outdir):
             _plot_logit_hist(softmax(cln_logits, axis=1), alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'adv_img_and_logits.png'))
+
+def maybe_convert_to_float(s):
+    try:
+        f = float(s)
+    except:
+        f = s
+    return f
+
+def plot_adv_imgs(logdict, outdir):
+    test_acc = logdict['metrics']['test_accs']
+    test_acc = {maybe_convert_to_float(k):v for k,v in test_acc.items()}
+    data_and_preds = logdict['adv_data_and_preds']
+    print(list(data_and_preds[0]().keys()))
+    models = logdict['models']
+
+    plt.figure(figsize=(18, 25))
+    num_plots_per_eps = 10
+    num_positive = 3
+    ncols = num_plots_per_eps
+    nrows = len(test_acc.keys()) * 2
+    for i,(test_eps, accs) in enumerate(sorted(test_acc.items(), key=lambda x:x[0])):
+        best_model_idx = np.argmax(accs)
+        model_data_and_preds = data_and_preds[best_model_idx]()[test_eps]
+        model_clean_data_and_preds = data_and_preds[best_model_idx]()[min(test_acc.keys())]
+        y = np.array(model_data_and_preds['Y'])
+        y_pred = np.array(model_data_and_preds['Y_pred'])
+        y_clean_pred = np.array(model_clean_data_and_preds['Y_pred'])
+        x = np.array(model_data_and_preds['X']).squeeze()
+        x_clean = np.array(model_clean_data_and_preds['X']).squeeze()
+        if len(x.shape) == 4:
+            x = np.transpose(x, (0,2,3,1))
+            x_clean = np.transpose(x_clean, (0,2,3,1))
+        if '-' in test_eps:
+            [attack_type, test_eps] = test_eps.split('-')
+            test_eps = float(test_eps)
+        else:
+            attack_type = ''
+        pos_idx = np.arange(len(x))[(y == y_pred)]
+        if len(pos_idx) > 0:
+            pos_idx = np.random.choice(pos_idx, size=num_positive)
+        else:
+            pos_idx = [-1]*(num_positive)
+        neg_idx = np.arange(len(x))[((y == y_clean_pred) | (test_eps == 0.)) & (y != y_pred)]
+        if len(neg_idx) > 0:
+            neg_idx = np.random.choice(neg_idx, size=num_plots_per_eps-num_positive)
+        else:
+            neg_idx = [-1]*(num_plots_per_eps-num_positive)
+        selected_idx = np.concatenate((pos_idx, neg_idx), axis=0)
+        print(test_eps, selected_idx)
+        for j,k in enumerate(selected_idx):
+            plt.subplot(nrows, ncols, 2*i*ncols + j + 1)
+            if j == 0:
+                plt.title(f'acc_{attack_type}{test_eps}={accs[best_model_idx]:.3f}')
+            if k != -1:
+                plt.imshow(x_clean[k])
+                plt.subplot(nrows, ncols, (2*i + 1)*ncols + j + 1)
+                plt.imshow(x[k])
+                plt.title(f'L={y[k]}, P={y_pred[k]}\nL2={np.linalg.norm((x_clean[k]-x[k]).flatten()):.2e}')
+        
+    # plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'adv_imgs.png'))
 
 def plot_state_hists(logdict, outdir, projection='pca'):
     test_acc = logdict['metrics']['test_accs']
