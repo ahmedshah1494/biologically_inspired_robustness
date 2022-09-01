@@ -1,8 +1,10 @@
 from enum import Enum, auto
 import os
-from typing import List, Type, Union, Tuple
+import shutil
+from typing import List, Literal, Type, Union, Tuple
 from attrs import define, field
 from mllib.trainers.base_trainers import Trainer as _Trainer
+from mllib.trainers.base_trainers import MixedPrecisionTrainerMixin
 from mllib.utils.metric_utils import compute_accuracy, get_preds_from_logits
 from mllib.param import BaseParameters
 from numpy import iterable
@@ -12,6 +14,7 @@ import torchattacks
 from einops import rearrange
 
 from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper, FoolboxCWL2AttackWrapper
+from mllib.adversarial.randomized_smoothing.core import Smooth
 from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin
 from adversarialML.biologically_inspired_models.src.pruning import PruningMixin
 from adversarialML.biologically_inspired_models.src.utils import aggregate_dicts, merge_iterables_in_dict, write_json, write_pickle, load_json, recursive_dict_update, load_pickle
@@ -66,7 +69,7 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         x,y = batch
         if adv_attack is not None:
             if x.dim() == 5:
-                y_ = torch.cat([y]*x.shape[1], 0)
+                y_ = torch.repeat_interleave(y, x.shape[1])
                 x = rearrange(x, 'b n c h w -> (b n) c h w')
                 x = adv_attack(x, y_)
                 x = rearrange(x, '(b n) c h w -> b n c h w', b = len(y))
@@ -232,6 +235,19 @@ def compute_adversarial_success_rate(clean_preds, preds, labels, target_labels):
         adv_succ = (preds == target_labels).astype(float).mean()
     return adv_succ
 
+def update_and_save_logs(logdir, outfilename, load_fn, write_fn, save_fn, *save_fn_args, **save_fn_kwargs):
+    outfile = os.path.join(logdir, outfilename)
+    if os.path.exists(outfile):
+        old_metrics = load_fn(outfile)
+        tmpoutfile = os.path.join(logdir, '.'+outfilename)
+        shutil.copy(outfile, tmpoutfile)
+        save_fn(*save_fn_args, **save_fn_kwargs)
+        new_metrics = load_fn(outfile)
+        recursive_dict_update(new_metrics, old_metrics)
+        write_fn(old_metrics, outfile)
+    else:
+        save_fn(*save_fn_args, **save_fn_kwargs)
+
 class MultiAttackEvaluationTrainer(AdversarialTrainer):
     def __init__(self, params):
         super().__init__(params)
@@ -325,3 +341,107 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             target_labels[atk_name] = y_tgt.detach().cpu().numpy().tolist()
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
         return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels, 'logits': test_logits}, metrics
+
+
+@define(slots=False)
+class RandomizedSmoothingParams:
+    num_classes:int = None
+    sigmas: List[float] = None
+    batch: int = 1000
+    N0: int = 100
+    N: int =  100_000
+    alpha: float = 0.001
+    mode: Literal['certify', 'predict'] = 'certify'
+
+class RandomizedSmoothingEvaluationTrainer(_Trainer):
+    @define(slots=False)    
+    class TrainerParams(BaseParameters):
+        trainer_params: Type[_Trainer.TrainerParams] = field(factory=lambda: _Trainer.TrainerParams(None))
+        randomized_smoothing_params: RandomizedSmoothingParams = field(factory=RandomizedSmoothingParams)
+    
+    def __init__(self, params: TrainerParams):
+        super().__init__(params.trainer_params)
+        self.params = params
+        self.smoothed_models = [Smooth(self.model, self.params.randomized_smoothing_params.num_classes, s) for s in self.params.randomized_smoothing_params.sigmas]
+        self.metrics_filename = 'randomized_smoothing_metrics.json'
+        self.data_and_pred_filename = 'randomized_smoothing_preds_and_radii.pkl'
+    
+    def _single_sample_step(self, smoothed_model, x):
+        if self.params.randomized_smoothing_params.mode == 'certify':
+            return smoothed_model.certify(x, self.params.randomized_smoothing_params.N0,
+                                self.params.randomized_smoothing_params.N,
+                                self.params.randomized_smoothing_params.alpha,
+                                self.params.randomized_smoothing_params.batch)
+        elif self.params.randomized_smoothing_params.mode == 'predict':
+            return (smoothed_model.predict(x,self.params.randomized_smoothing_params.N,
+                                self.params.randomized_smoothing_params.alpha,
+                                self.params.randomized_smoothing_params.batch), 0.)
+        else:
+            raise ValueError(f'RandomizedSmoothingParams.mode must be either "certify" or "predict" but got {self.params.randomized_smoothing_params.mode}')
+
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+        preds = {}
+        radii = {}
+        acc = {}
+        y = y.detach().cpu().numpy()
+        for smoothed_model in self.smoothed_models:
+            _preds = []
+            _radii = []
+            for x_ in x:
+                p,r = self._single_sample_step(smoothed_model, x_)
+                _preds.append(p)
+                _radii.append(r)
+            # _preds = torch.stack(_preds)
+            # _radii = torch.stack(_radii)
+            preds[smoothed_model.sigma] = _preds#.detach().cpu().numpy().tolist()
+            radii[smoothed_model.sigma] = _radii#.detach().cpu().numpy().tolist()
+            acc[smoothed_model.sigma] = (np.array(_preds) == y).astype(float).mean()
+        metrics = {f'test_acc_{k}':v for k,v in acc.items()}
+        return {'preds': preds, 'radii': radii, 'labels':y.tolist(), 'inputs':x.detach().cpu().numpy()}, metrics
+    
+    def save_training_logs(self, train_acc, test_accs):
+        metrics = {
+            'train_acc':train_acc,
+            'test_accs':test_accs,
+        }
+        write_json(metrics, os.path.join(self.logdir, self.metrics_filename))
+
+    def save_data_and_preds(self, preds, labels, inputs, radii):
+        d = {
+            'X': inputs,
+            'Y': labels,
+            'preds_and_radii': {}
+        }
+        for k in preds.keys():
+            d['preds_and_radii'][k] = {
+                'Y_pred': preds[k],
+                'radii': radii[k]
+            }
+        write_pickle(d, os.path.join(self.logdir, self.data_and_pred_filename))
+    
+    def save_logs_after_test(self, train_metrics, test_outputs):
+        update_and_save_logs(self.logdir, self.metrics_filename, load_json, write_json, self.save_training_logs, 
+                                train_metrics['train_accuracy'], test_outputs['test_acc'])
+        update_and_save_logs(self.logdir, self.data_and_pred_filename, load_pickle, write_pickle, self.save_data_and_preds, 
+                                test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['radii'])
+
+    def test_epoch_end(self, outputs, metrics):
+        new_outputs = aggregate_dicts(outputs)
+        new_outputs = merge_iterables_in_dict(new_outputs)
+        test_acc = {}
+        for sigma, preds in new_outputs['preds'].items():
+            acc = (np.array(preds) == np.array(new_outputs['labels'])).astype(float).mean()
+            test_acc[sigma] = acc
+        new_outputs['test_acc'] = test_acc
+        return new_outputs, metrics
+    
+    def test(self):
+        test_outputs, test_metrics = self.test_loop(post_loop_fn=self.test_epoch_end)
+        print('test metrics:')
+        print(test_metrics)
+        _, train_metrics = self._batch_loop(self.val_step, self.train_loader, 0, logging=False)
+        for k in train_metrics:
+            train_metrics[k.replace('val', 'train')] = train_metrics.pop(k)
+        train_metrics = aggregate_dicts(train_metrics)
+        self.save_logs_after_test(train_metrics, test_outputs)
