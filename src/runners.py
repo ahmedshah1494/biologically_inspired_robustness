@@ -1,19 +1,24 @@
 from email.policy import strict
 import os
 import shutil
-from typing import List
-from attrs import define
+from typing import List, Type
+from attrs import define, field
 from mllib.runners.base_runners import BaseRunner
 from mllib.runners.configs import BaseExperimentConfig
 from mllib.tasks.base_tasks import AbstractTask
+from mllib.trainers.base_trainers import AbstractTrainer
 import torch
 
-from adversarialML.biologically_inspired_models.src.trainers import ActivityOptimizationParams, AdversarialTrainer, AdversarialParams, ConsistentActivationModelAdversarialTrainer, MultiAttackEvaluationTrainer
+from adversarialML.biologically_inspired_models.src.trainers import ActivityOptimizationParams, AdversarialTrainer, AdversarialParams, ConsistentActivationModelAdversarialTrainer, MultiAttackEvaluationTrainer, RandomizedSmoothingParams, RandomizedSmoothingEvaluationTrainer
 from adversarialML.biologically_inspired_models.src.utils import write_pickle
 
 @define(slots=False)
 class AdversarialExperimentConfig(BaseExperimentConfig):
     adv_config: AdversarialParams = AdversarialParams()
+
+@define(slots=False)
+class RandomizedSmoothingExperimentConfig(BaseExperimentConfig):
+    randomized_smoothing_config: RandomizedSmoothingParams = field(factory=lambda :RandomizedSmoothingParams(None))
 
 @define(slots=False)
 class ConsistentActivationAdversarialExperimentConfig(AdversarialExperimentConfig):
@@ -106,3 +111,17 @@ class ConsistentActivationAdversarialExperimentRunner(AdversarialExperimentRunne
         adv_trainer_params.adversarial_params = self.task.get_experiment_params().adv_config
         adv_trainer_params.act_opt_params = self.task.get_experiment_params().act_opt_config
         self.trainer = adv_trainer_params.cls(adv_trainer_params)
+
+class RandomizedSmoothingRunner(AdversarialAttackBatteryRunner):
+    def create_trainer(self):
+        trainer_params = self.create_trainer_params()
+        rs_trainer_params = RandomizedSmoothingEvaluationTrainer.get_params()
+        rs_trainer_params.trainer_params = trainer_params
+        rs_trainer_params.randomized_smoothing_params = self.task.get_experiment_params().randomized_smoothing_config
+        self.trainer = rs_trainer_params.cls(rs_trainer_params)
+    
+    def save_task(self):
+        if not os.path.exists(os.path.join(self.trainer.logdir, 'task.pkl')):
+            self.task.save_task(os.path.join(self.trainer.logdir, 'task.pkl'))
+        randomized_smoothing_params = self.task.get_experiment_params().randomized_smoothing_config
+        write_pickle(randomized_smoothing_params, os.path.join(self.trainer.logdir, 'randomized_smoothing_config.pkl'))
