@@ -11,9 +11,9 @@ import numpy as np
 from einops.layers.torch import Rearrange
 from einops import rearrange
 
-from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin, ConsistencyOptimizationParams, ConsistentActivationLayer, ConvParams
+from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin, ConsistencyOptimizationParams, ConsistentActivationLayer, ConvParams, IdentityLayer
 
-from adversarialML.biologically_inspired_models.src.supconloss import SupConLoss
+from adversarialML.biologically_inspired_models.src.supconloss import SupConLoss, AngularSupConLoss
 
 class LayerNormLayer(AbstractModel):
     @define(slots=False)
@@ -68,7 +68,7 @@ class LinearLayer(AbstractModel):
         input_size = self.params.common_params.input_size
         if np.iterable(input_size):
             input_size = np.prod(input_size)
-        self.layer = nn.Linear(input_size, self.params.common_params.num_units)
+        self.layer = nn.Linear(input_size, self.params.common_params.num_units, bias=self.params.common_params.bias)
     
     def forward(self, x):
         return self.layer(x)
@@ -229,14 +229,24 @@ class SupervisedContrastiveMLPMixer(MLPMixer):
     @define(slots=False)
     class ModelParams(MLPMixer.ModelParams):
         projection_params: BaseParameters = None
+        use_angular_supcon_loss: bool = False
+        angular_supcon_loss_margin: float = 1.
+        supcon_loss_temperature: float = 0.07
 
     def _make_network(self):
         super()._make_network()
         self.proj = self.params.projection_params.cls(self.params.projection_params)
+        if self.params.use_angular_supcon_loss:
+            self.lossfn = AngularSupConLoss(base_temperature=self.params.supcon_loss_temperature, temperature=self.params.supcon_loss_temperature, margin=self.params.angular_supcon_loss_margin)
+        else:
+            self.lossfn = SupConLoss(base_temperature=self.params.supcon_loss_temperature, temperature=self.params.supcon_loss_temperature)
     
     def _get_proj(self, z):
-        p = self.proj(z)
-        p = nn.functional.normalize(p)
+        if not isinstance(self.proj, IdentityLayer):
+            p = self.proj(z)
+            p = nn.functional.normalize(p)
+        else:
+            p = z
         return p
     
     def _get_feats(self, x):
@@ -251,11 +261,10 @@ class SupervisedContrastiveMLPMixer(MLPMixer):
         proj = self._get_proj(feat)
         logits = self._run_classifier(feat.detach())
 
-        feat = rearrange(feat, '(n b) d -> b n d', b=y.shape[0])
+        proj = rearrange(proj, '(n b) d -> b n d', b=y.shape[0])
         logits = rearrange(logits, '(n b) d -> b n d', b=y.shape[0])
 
-        L = SupConLoss()
-        loss1 = L(feat, y)
+        loss1 = self.lossfn(proj, y)
         
         loss2 = 0
         for i in range(logits.shape[1]):
