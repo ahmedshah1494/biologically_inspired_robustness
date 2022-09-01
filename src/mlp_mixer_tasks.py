@@ -9,9 +9,9 @@ from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, Supp
 from adversarialML.biologically_inspired_models.src.models import ConvEncoder, ConsistentActivationLayer, ScanningConsistentActivationLayer, SequentialLayers, IdentityLayer
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import MLPMixer, MixerBlock
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import ConsistentActivationMixerBlock, ConsistentActivationMixerMLP, FirstNExtractionClassifier, LinearLayer, MixerMLP, SupervisedContrastiveMLPMixer
-from adversarialML.biologically_inspired_models.src.runners import AdversarialExperimentConfig, ConsistentActivationAdversarialExperimentConfig
+from adversarialML.biologically_inspired_models.src.runners import AdversarialExperimentConfig, ConsistentActivationAdversarialExperimentConfig, RandomizedSmoothingExperimentConfig
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import UnfoldPatchExtractor
-from adversarialML.biologically_inspired_models.src.retina_preproc import RetinaBlurFilter, RetinaSampleFilter, RetinaNonUniformPatchEmbedding
+from adversarialML.biologically_inspired_models.src.retina_preproc import RetinaBlurFilter, RetinaSampleFilter, RetinaNonUniformPatchEmbedding, AbstractRetinaFilter
 from mlp_mixer_models import NormalizationLayer
 from adversarialML.biologically_inspired_models.src.supconloss import TwoCropTransform
 
@@ -20,6 +20,29 @@ from torch import nn
 import torchvision
 
 from adversarialML.biologically_inspired_models.src.trainers import ActivityOptimizationSchedule
+
+class FastAdversarialTrainingMixin(object):
+    def get_experiment_params(self):
+        atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
+        atk_p.eps = 0.032
+        atk_p.nsteps = 1
+        atk_p.step_size = atk_p.eps * 1.25
+        atk_p.random_start = True
+
+        p = super().get_experiment_params()
+        p.adv_config.training_attack_params = atk_p
+        return p
+
+class AdversarialTrainingMixin(object):
+    def get_experiment_params(self):
+        atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
+        atk_p.eps = 0.032
+        atk_p.nsteps = 7
+        atk_p.random_start = True
+
+        p = super().get_experiment_params()
+        p.adv_config.training_attack_params = atk_p
+        return p
 
 class Cifar10AutoAugmentMLPMixerTask(AbstractTask):
     hidden_size = 128
@@ -126,21 +149,83 @@ class Cifar10AutoAugmentMLPMixer8LTask(Cifar10AutoAugmentMLPMixerTask):
 class Cifar10AutoAugmentMLPMixer1LTask(Cifar10AutoAugmentMLPMixerTask):
     num_blocks = 1
 
-class SupConMLPMixerTaskMixin(object):
+class Cifar10AutoAugmentMLPMixer8LAdvTrainTask(FastAdversarialTrainingMixin,Cifar10AutoAugmentMLPMixer8LTask):
+    pass
+
+class SupConSetupMixin(object):
     def get_dataset_params(self):
         p = super().get_dataset_params()
         trainT, testT = p.custom_transforms
         p.custom_transforms = (TwoCropTransform(trainT), testT)
         return p
-
-    def get_model_params(self):
-        p = super().get_model_params()
-        p = SupervisedContrastiveMLPMixer.ModelParams(**(p.asdict(recurse=False)))
-        p.projection_params = self._get_mlpc_params()
-        p.cls = SupervisedContrastiveMLPMixer
+    
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        modelp = self.get_model_params()
+        if modelp.use_angular_supcon_loss:
+            p.exp_name = f'm={modelp.angular_supcon_loss_margin}-{p.exp_name}'
         return p
 
-class Cifar10AutoAugmentSupConMLPMixer8LTask(SupConMLPMixerTaskMixin, Cifar10AutoAugmentMLPMixer8LTask):
+def convert_to_supcon_params(p):
+    p = SupervisedContrastiveMLPMixer.ModelParams(**(p.asdict(recurse=False)))
+    p.cls = SupervisedContrastiveMLPMixer
+    return p
+
+class SupConNoProjModelMixin(object):
+    def get_model_params(self):
+        p = super().get_model_params()
+        p = convert_to_supcon_params(p)
+        p.projection_params = IdentityLayer.get_params() #self._get_mlpc_params()
+        return p
+
+class SupConLinearProjModelMixin(object):
+    def get_model_params(self):
+        p = super().get_model_params()
+        p = convert_to_supcon_params(p)
+        p.projection_params = LinearLayer.get_params()
+        p.projection_params.common_params.input_size = [self.hidden_size]
+        p.projection_params.common_params.num_units = self.hidden_size
+        p.projection_params.common_params.activation = nn.Identity
+        p.projection_params.common_params.bias = False
+        return p
+
+class AngularSupConModelMixin(object):
+    def get_model_params(self):
+        p = super().get_model_params()
+        p.use_angular_supcon_loss = True
+        p.angular_supcon_loss_margin = 1.
+        return p
+
+class CenterLocModeMixin(object):
+    def _get_patch_params(self):
+        p = super()._get_patch_params()
+        if issubclass(p.cls, SequentialLayers):
+            for lp in p.layer_params:
+                if issubclass(lp.cls, AbstractRetinaFilter):
+                    lp.loc_mode = 'center'
+        elif issubclass(p.cls, AbstractRetinaFilter):
+            p.loc_mode = 'center'
+        return p
+
+class Cifar10AutoAugmentSupConMLPMixer8LTask(SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentMLPMixer8LTask):
+    pass
+
+class Cifar10AutoAugmentSupConLinearProjMLPMixer8LTask(SupConLinearProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentMLPMixer8LTask):
+    pass    
+
+class Cifar10AutoAugmentAngularSupConMLPMixer8LTask(AngularSupConModelMixin, SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentMLPMixer8LTask):
+    pass
+
+class Cifar10AutoAugmentAngularSupConLinearProjMLPMixer8LTask(AngularSupConModelMixin, SupConLinearProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentMLPMixer8LTask):
+    pass
+
+class Cifar10AutoAugmentSupConMLPMixer8LAdvTrainTask(FastAdversarialTrainingMixin, SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentMLPMixer8LTask):
+    pass
+class Cifar10AutoAugmentSupConLinearProjMLPMixer8LAdvTrainTask(FastAdversarialTrainingMixin, SupConLinearProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentMLPMixer8LTask):
+    pass
+class Cifar10AutoAugmentAngularSupConMLPMixer8LAdvTrainTask(FastAdversarialTrainingMixin, AngularSupConModelMixin, SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentMLPMixer8LTask):
+    pass
+class Cifar10AutoAugmentAngularSupConLinearProjMLPMixer8LAdvTrainTask(FastAdversarialTrainingMixin, AngularSupConModelMixin, SupConLinearProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentMLPMixer8LTask):
     pass
 
 class Cifar10AutoAugmentwRetinaBlurMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
@@ -168,7 +253,23 @@ class Cifar10AutoAugmentwRetinaBlurMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
 class Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask(Cifar10AutoAugmentwRetinaBlurMLPMixerTask):
     num_blocks = 8
 
-class Cifar10AutoAugmentwRetinaBlurSupConMLPMixer8LTask(SupConMLPMixerTaskMixin, Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask):
+class Cifar10AutoAugmentwRetinaBlurMLPMixer8LAdvTrainTask(FastAdversarialTrainingMixin, Cifar10AutoAugmentwRetinaBlurMLPMixerTask):
+    pass
+
+class Cifar10AutoAugmentwRetinaBlurSupConMLPMixer8LTask(SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask):
+    pass
+
+class Cifar10AutoAugmentwRetinaBlurAngularSupConMLPMixer8LTask(AngularSupConModelMixin, SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask):
+    pass
+class Cifar10AutoAugmentwRetinaBlurSupConLinearProjMLPMixer8LTask(SupConLinearProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask):
+    pass
+
+class Cifar10AutoAugmentwCenteredRetinaBlurSupConMLPMixer8LTask(CenterLocModeMixin, SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask):
+    pass
+
+class Cifar10AutoAugmentwCenteredRetinaBlurAngularSupConMLPMixer8LTask(CenterLocModeMixin, AngularSupConModelMixin, SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask):
+    pass
+class Cifar10AutoAugmentwCenteredRetinaBlurSupConLinearProjMLPMixer8LTask(CenterLocModeMixin, SupConLinearProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask):
     pass
 
 class Cifar10AutoAugmentwCenteredRetinaBlurMLPMixer8LEvalTask(Cifar10AutoAugmentwRetinaBlurMLPMixer8LTask):
@@ -232,7 +333,21 @@ class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixerTask(Cifar10AutoA
 class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask(Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixerTask):
     num_blocks = 8
 
-class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingSupConMLPMixer8LTask(SupConMLPMixerTaskMixin, Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask):
+class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LAdvTrainTask(FastAdversarialTrainingMixin, Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixerTask):
+    pass
+
+class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingSupConMLPMixer8LTask(SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask):
+    pass
+
+class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingAngularSupConMLPMixer8LTask(SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask):
+    def get_model_params(self):
+        p = super().get_model_params()
+        p.use_angular_supcon_loss = True
+        return p
+
+class Cifar10AutoAugmentwCenteredRetinaNonUniformPatchEmbeddingSupConMLPMixer8LTask(CenterLocModeMixin, SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask):
+    pass
+class Cifar10AutoAugmentwCenteredRetinaNonUniformPatchEmbeddingAngularSupConMLPMixer8LTask(CenterLocModeMixin, AngularSupConModelMixin, SupConNoProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask):
     pass
 
 class Cifar10AutoAugmentwCenteredRetinaNonUniformPatchEmbeddingMLPMixer8LEvalTask(Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask):
