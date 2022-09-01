@@ -82,10 +82,12 @@ def get_eps_from_logdict_key(s):
         eps = float(eps)
     return atkname, eps
 
-def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='metrics.json',
+def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='adv_metrics.json',
                 state_hist_filename='state_dict_hist.json', data_filename='data_and_preds.pkl',
                 adv_battery_data_filename='adv_data_and_preds.pkl', adv_metrics_filename='adv_metrics.json',
-                adv_succ_filename='adv_succ.json', args_filename='task.pkl'):
+                adv_succ_filename='adv_succ.json', args_filename='task.pkl', 
+                randomized_smoothing_metrics_filename='randomized_smoothing_metrics.json',
+                randomized_smoothing_data_filename='randomized_smoothing_preds_and_radii.pkl'):
     print(logdir)
     metrics_path = os.path.join(logdir, metrics_filename)
     if os.path.exists(metrics_path):
@@ -108,6 +110,8 @@ def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='metric
     model_adv_metrics = []
     model_adv_succ = []
     model_paths = []
+    rs_metrics =[]
+    lazy_rs_preds_and_radii = []
     for root, _, files in os.walk(logdir):
         model_files = [f for f in files if f.startswith('model') and f.endswith('.pt')]
         if len(model_files) > 0:
@@ -128,6 +132,12 @@ def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='metric
         if adv_succ_filename in files:
             as_fp = os.path.join(root, adv_succ_filename)
             model_adv_succ.append(load_json(as_fp))
+        if randomized_smoothing_data_filename in files:
+            data_fp = os.path.join(root, randomized_smoothing_data_filename)
+            lazy_rs_preds_and_radii.append(lazy_load_pickle(data_fp))
+        if randomized_smoothing_metrics_filename in files:
+            am_fp = os.path.join(root, randomized_smoothing_metrics_filename)
+            rs_metrics.append(load_json(am_fp))
         if metrics_filename in files and (root != logdir):
             m_fp = os.path.join(root, metrics_filename)
             model_metrics.append(load_json(m_fp))
@@ -146,6 +156,8 @@ def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='metric
         'model_adv_succ': model_adv_succ,
         'data_and_preds': lazy_data_and_preds,
         'adv_data_and_preds': lazy_adv_data_and_preds,
+        'rs_metrics': rs_metrics,
+        'rs_preds_and_radii': lazy_rs_preds_and_radii,
         'args': args
     }
     return log_dict

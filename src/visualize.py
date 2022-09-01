@@ -242,6 +242,42 @@ def plot_test_accuracy_auc_bar_multimodel(logdicts, outdir):
 def plot_test_accuracy_auc_box_multimodel(logdicts, outdir):
     return plot_test_accuracy_auc_multimodel(logdicts, outdir, plot_confint=False)
 
+def plot_certified_accuracy(logdicts, outdir):
+    radius_step = 0.01
+    data = []
+    for model_name, logdict in logdicts.items():
+        for model_data in logdict['rs_preds_and_radii']:
+            model_data = model_data()
+            y = np.array(model_data['Y'])
+            pnr_for_sigma = model_data['preds_and_radii']
+            for sigma, pnr in pnr_for_sigma.items():
+                if sigma > 0.125:
+                    continue
+                preds = np.array(pnr['Y_pred'])
+                radii = np.array(pnr['radii'])
+
+                correct = (preds == y)
+                # unique_radii = np.unique(radii)
+                # if unique_radii[0] > 0:
+                #     unique_radii = np.insert(unique_radii, 0, 0.)
+                unique_radii = np.arange(0, radii.max() + radius_step, radius_step)
+                
+                acc_at_radius = [(correct & (radii >= r)).mean() for r in unique_radii]
+
+                for rad, acc in zip(unique_radii, acc_at_radius):
+                    r = {
+                        'sigma': sigma,
+                        'model_name': model_name,
+                        'radius': rad,
+                        'accuracy': acc
+                    }
+                    data.append(r)
+    df = pd.DataFrame(data)
+    plt.figure()
+    sns.set_style("whitegrid")
+    sns.relplot(x='radius', y='accuracy', hue='model_name', col='sigma', data=df, kind='line')
+    plt.savefig(os.path.join(outdir, 'rs_certified_acc_line.png'))
+
 def plot_test_sparsity_multimodel(logdicts, outdir):
     data = []
     for model_name, logdict in logdicts.items():
