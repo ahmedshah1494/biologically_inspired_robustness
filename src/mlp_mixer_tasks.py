@@ -3,23 +3,53 @@ from typing import List, Tuple
 from mllib.tasks.base_tasks import AbstractTask
 from mllib.models.base_models import MLP
 from mllib.runners.configs import BaseExperimentConfig
-from mllib.optimizers.configs import SGDOptimizerConfig, ReduceLROnPlateauConfig, AdamOptimizerConfig, CosineAnnealingWarmRestartsConfig, SequentialLRConfig, LinearLRConfig
+from mllib.optimizers.configs import SGDOptimizerConfig, ReduceLROnPlateauConfig, AdamOptimizerConfig, CosineAnnealingWarmRestartsConfig, SequentialLRConfig, LinearLRConfig, CyclicLRConfig
 from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, SupportedBackend
+from mllib.datasets.dataset_factory import ImageDatasetFactory, SupportedDatasets
 
 from adversarialML.biologically_inspired_models.src.models import ConvEncoder, ConsistentActivationLayer, ScanningConsistentActivationLayer, SequentialLayers, IdentityLayer
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import MLPMixer, MixerBlock
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import ConsistentActivationMixerBlock, ConsistentActivationMixerMLP, FirstNExtractionClassifier, LinearLayer, MixerMLP, SupervisedContrastiveMLPMixer
-from adversarialML.biologically_inspired_models.src.runners import AdversarialExperimentConfig, ConsistentActivationAdversarialExperimentConfig, RandomizedSmoothingExperimentConfig
+# from adversarialML.biologically_inspired_models.src.runners import AdversarialExperimentConfig, ConsistentActivationAdversarialExperimentConfig, RandomizedSmoothingExperimentConfig
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import UnfoldPatchExtractor
 from adversarialML.biologically_inspired_models.src.retina_preproc import RetinaBlurFilter, RetinaSampleFilter, RetinaNonUniformPatchEmbedding, AbstractRetinaFilter
 from mlp_mixer_models import NormalizationLayer
 from adversarialML.biologically_inspired_models.src.supconloss import TwoCropTransform
 
-from tasks import get_cifar10_params, set_SGD_params, set_adv_params, set_common_training_params
 from torch import nn
 import torchvision
 
 from adversarialML.biologically_inspired_models.src.trainers import ActivityOptimizationSchedule
+
+from trainers import AdversarialParams, AdversarialTrainer, ConsistentActivationModelAdversarialTrainer
+
+def get_cifar10_params(num_train=25000, num_test=1000):
+    p = ImageDatasetFactory.get_params()
+    p.dataset = SupportedDatasets.CIFAR10
+    p.datafolder = '/home/mshah1/workhorse3/'
+    p.max_num_train = num_train
+    p.max_num_test = num_test
+    return p
+
+def set_common_training_params(p: BaseExperimentConfig):
+    p.batch_size = 256
+    p.trainer_params.training_params.nepochs = 200
+    p.num_trainings = 10
+    p.logdir = '/share/workhorse3/mshah1/biologically_inspired_models/logs/'
+    p.trainer_params.training_params.early_stop_patience = 20
+    p.trainer_params.training_params.tracked_metric = 'val_loss'
+    p.trainer_params.training_params.tracking_mode = 'min'
+
+def set_adv_params(p: AdversarialParams, test_eps):
+    p.training_attack_params = None
+    def eps_to_attack(eps):
+        atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
+        atk_p.eps = eps
+        atk_p.nsteps = 50
+        atk_p.step_size = eps/40
+        atk_p.random_start = True
+        return atk_p
+    p.testing_attack_params = [eps_to_attack(eps) for eps in test_eps]
 
 class FastAdversarialTrainingMixin(object):
     def get_experiment_params(self):
@@ -30,7 +60,7 @@ class FastAdversarialTrainingMixin(object):
         atk_p.random_start = True
 
         p = super().get_experiment_params()
-        p.adv_config.training_attack_params = atk_p
+        p.trainer_params.adversarial_params.training_attack_params = atk_p
         return p
 
 class AdversarialTrainingMixin(object):
@@ -41,7 +71,7 @@ class AdversarialTrainingMixin(object):
         atk_p.random_start = True
 
         p = super().get_experiment_params()
-        p.adv_config.training_attack_params = atk_p
+        p.trainer_params.adversarial_params.training_attack_params = atk_p
         return p
 
 class Cifar10AutoAugmentMLPMixerTask(AbstractTask):
@@ -69,20 +99,21 @@ class Cifar10AutoAugmentMLPMixerTask(AbstractTask):
         return p
     
     def get_experiment_params(self):
-        p = AdversarialExperimentConfig()
+        p = BaseExperimentConfig()
+        p.trainer_params = AdversarialTrainer.get_params()
         set_common_training_params(p)
-        p.training_params.nepochs = 300
         p.optimizer_config = AdamOptimizerConfig()
         p.optimizer_config.weight_decay = 5e-5
         p.scheduler_config = CosineAnnealingWarmRestartsConfig()
-        p.training_params.early_stop_patience = 100
-        p.training_params.tracked_metric = 'val_accuracy'
-        p.training_params.tracking_mode = 'max'
-        p.scheduler_config.T_0 = p.training_params.nepochs
+        p.trainer_params.training_params.nepochs = 300
+        p.trainer_params.training_params.early_stop_patience = 100
+        p.trainer_params.training_params.tracked_metric = 'val_accuracy'
+        p.trainer_params.training_params.tracking_mode = 'max'
+        p.scheduler_config.T_0 = p.trainer_params.training_params.nepochs
         p.scheduler_config.eta_min = 1e-6
         p.batch_size = 128
         test_eps = [0.0, 0.008, 0.016, 0.024, 0.032, 0.048, 0.064]
-        set_adv_params(p, test_eps)
+        set_adv_params(p.trainer_params.adversarial_params, test_eps)
         dsp = self.get_dataset_params()
         p.exp_name = f'{dsp.max_num_train//1000}K'
         return p
@@ -246,7 +277,7 @@ class Cifar10AutoAugmentwRetinaBlurMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
 
     def get_experiment_params(self):
         p = super().get_experiment_params()
-        for ap in p.adv_config.testing_attack_params:
+        for ap in p.trainer_params.adversarial_params.testing_attack_params:
             ap.eot_iter = 10
         return p
 
@@ -300,7 +331,7 @@ class Cifar10AutoAugmentwRetinaSamplerMLPMixerTask(Cifar10AutoAugmentMLPMixerTas
 
     def get_experiment_params(self):
         p = super().get_experiment_params()
-        for ap in p.adv_config.testing_attack_params:
+        for ap in p.trainer_params.adversarial_params.testing_attack_params:
             ap.eot_iter = 10
         return p
 
@@ -325,7 +356,7 @@ class Cifar10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixerTask(Cifar10AutoA
 
     def get_experiment_params(self):
         p = super().get_experiment_params()
-        for ap in p.adv_config.testing_attack_params:
+        for ap in p.trainer_params.adversarial_params.testing_attack_params:
             ap.eot_iter = 10
         p.exp_name = 'PaddedCrops' + (f'-{p.exp_name}' if len(p.exp_name)>0 else '')
         return p
@@ -434,19 +465,20 @@ class Cifar10AutoAugmentCAMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
         return block_params
 
     def get_experiment_params(self):
-        p = ConsistentActivationAdversarialExperimentConfig()
-        p.act_opt_config.act_opt_lr_warmup_schedule = ActivityOptimizationSchedule.LINEAR
-        p.act_opt_config.init_act_opt_lr = 1e-2
-        p.act_opt_config.num_warmup_epochs = 60
+        p = BaseExperimentConfig()
+        p.trainer_params = ConsistentActivationModelAdversarialTrainer.get_params()
+        p.trainer_params.act_opt_params.act_opt_lr_warmup_schedule = ActivityOptimizationSchedule.LINEAR
+        p.trainer_params.act_opt_params.init_act_opt_lr = 1e-2
+        p.trainer_params.act_opt_params.num_warmup_epochs = 60
         set_common_training_params(p)
-        p.training_params.nepochs = 300
+        p.trainer_params.training_params.nepochs = 300
         p.optimizer_config = AdamOptimizerConfig()
         p.optimizer_config.weight_decay = 5e-5
         p.scheduler_config = CosineAnnealingWarmRestartsConfig()
-        p.training_params.early_stop_patience = 100
-        p.training_params.tracked_metric = 'val_accuracy'
-        p.training_params.tracking_mode = 'max'
-        p.scheduler_config.T_0 = p.training_params.nepochs
+        p.trainer_params.training_params.early_stop_patience = 100
+        p.trainer_params.training_params.tracked_metric = 'val_accuracy'
+        p.trainer_params.training_params.tracking_mode = 'max'
+        p.scheduler_config.T_0 = p.trainer_params.training_params.nepochs
         p.scheduler_config.eta_min = 1e-6
         p.batch_size = 128
         test_eps = [0.0, 0.008, 0.016, 0.024, 0.032, 0.048, 0.064]
