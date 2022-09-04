@@ -13,8 +13,6 @@ from einops import rearrange
 
 from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin, ConsistencyOptimizationParams, ConsistentActivationLayer, ConvParams, IdentityLayer
 
-from adversarialML.biologically_inspired_models.src.supconloss import SupConLoss, AngularSupConLoss
-
 class LayerNormLayer(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
@@ -204,75 +202,9 @@ class MLPMixer(AbstractModel):
         y = self._run_classifier(z)
         return y
 
-    # def forward(self, x):
-    #     if self.params.normalize_input:
-    #         x = (x - self.mean)/self.std
-    #     x: torch.Tensor = self.patch_gen(x)
-    #     if isinstance(x, tuple):
-    #         x = x[0]
-    #     z = self._reshape_grid_to_patches(x)
-    #     z = self.layernorm(z)
-    #     z = self.mixer_blocks(z)
-    #     z = z.mean(1)
-    #     y = self.classifier(z)
-    #     return y
-    
     def compute_loss(self, x, y, return_logits=True):
         logits = self.forward(x)
         loss = nn.functional.cross_entropy(logits, y)
-        if return_logits:
-            return logits, loss
-        else:
-            return loss
-
-class SupervisedContrastiveMLPMixer(MLPMixer):
-    @define(slots=False)
-    class ModelParams(MLPMixer.ModelParams):
-        projection_params: BaseParameters = None
-        use_angular_supcon_loss: bool = False
-        angular_supcon_loss_margin: float = 1.
-        supcon_loss_temperature: float = 0.07
-
-    def _make_network(self):
-        super()._make_network()
-        self.proj = self.params.projection_params.cls(self.params.projection_params)
-        if self.params.use_angular_supcon_loss:
-            self.lossfn = AngularSupConLoss(base_temperature=self.params.supcon_loss_temperature, temperature=self.params.supcon_loss_temperature, margin=self.params.angular_supcon_loss_margin)
-        else:
-            self.lossfn = SupConLoss(base_temperature=self.params.supcon_loss_temperature, temperature=self.params.supcon_loss_temperature)
-    
-    def _get_proj(self, z):
-        if not isinstance(self.proj, IdentityLayer):
-            p = self.proj(z)
-            p = nn.functional.normalize(p)
-        else:
-            p = z
-        return p
-    
-    def _get_feats(self, x):
-        z = super()._get_feats(x)
-        z = nn.functional.normalize(z)
-        return z
-    
-    def compute_loss(self, x, y, return_logits=True):
-        if x.dim() == 5:
-            x = rearrange(x, 'b n c h w -> (n b) c h w')
-        feat = self._get_feats(x)
-        proj = self._get_proj(feat)
-        logits = self._run_classifier(feat.detach())
-
-        proj = rearrange(proj, '(n b) d -> b n d', b=y.shape[0])
-        logits = rearrange(logits, '(n b) d -> b n d', b=y.shape[0])
-
-        loss1 = self.lossfn(proj, y)
-        
-        loss2 = 0
-        for i in range(logits.shape[1]):
-            loss2 += nn.functional.cross_entropy(logits[:, i], y)
-        loss2 /= logits.shape[1]
-        loss = loss1 + loss2
-
-        logits = logits.mean(1)
         if return_logits:
             return logits, loss
         else:
