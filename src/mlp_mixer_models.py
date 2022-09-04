@@ -13,8 +13,6 @@ from einops import rearrange
 
 from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin, ConsistencyOptimizationParams, ConsistentActivationLayer, ConvParams, IdentityLayer
 
-from adversarialML.biologically_inspired_models.src.supconloss import SupConLoss, AngularSupConLoss
-
 class LayerNormLayer(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
@@ -204,19 +202,6 @@ class MLPMixer(AbstractModel):
         y = self._run_classifier(z)
         return y
 
-    # def forward(self, x):
-    #     if self.params.normalize_input:
-    #         x = (x - self.mean)/self.std
-    #     x: torch.Tensor = self.patch_gen(x)
-    #     if isinstance(x, tuple):
-    #         x = x[0]
-    #     z = self._reshape_grid_to_patches(x)
-    #     z = self.layernorm(z)
-    #     z = self.mixer_blocks(z)
-    #     z = z.mean(1)
-    #     y = self.classifier(z)
-    #     return y
-    
     def compute_loss(self, x, y, return_logits=True):
         logits = self.forward(x)
         loss = nn.functional.cross_entropy(logits, y)
