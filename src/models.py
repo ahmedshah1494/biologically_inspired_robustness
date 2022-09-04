@@ -11,7 +11,10 @@ import torch
 import torchvision
 
 from adversarialML.biologically_inspired_models.src.model_utils import _make_first_dim_last, _make_last_dim_first, merge_strings, mm, str_to_act_and_dact_fn, _compute_conv_output_shape
-
+from adversarialML.biologically_inspired_models.src.supconloss import SupConLoss, AngularSupConLoss
+from fastai.vision.models.xresnet import xresnet34
+from einops import rearrange
+from fastai.layers import ResBlock
 @define(slots=False)
 class CommonModelParams:
     input_size: Union[int, List[int]] = None
@@ -873,9 +876,9 @@ class GeneralClassifier(AbstractModel):
         else:
             r = y
             conv_extra_outputs = ()
-        if np.random.uniform(0, 1) < 1/100:
-            _r = r.detach().cpu().numpy()
-            print(f'sparsity={(_r == 0).astype(float).mean():3f}', _r.max(), np.quantile(_r, 0.99))
+        # if np.random.uniform(0, 1) < 1/100:
+        #     _r = r.detach().cpu().numpy()
+        #     print(f'sparsity={(_r == 0).astype(float).mean():3f}', _r.max(), np.quantile(_r, 0.99))
         out = self.classifier(r, *fwd_args, **fwd_kwargs)
         if isinstance(out, tuple):
             logits = out[0]
@@ -1073,6 +1076,119 @@ class ConvEncoder(AbstractModel, CommonModelMixin):
         output = (loss,)
         if return_state_hist:
             output = output + (None,)
+        if return_logits:
+            output = (logits,) + output
+        return output
+
+class SupervisedContrastiveTrainingWrapper(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        model_params: BaseParameters = None
+        projection_params: BaseParameters = None
+        use_angular_supcon_loss: bool = False
+        angular_supcon_loss_margin: float = 1.
+        supcon_loss_temperature: float = 0.07
+    
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+        self._make_network()
+
+    def _make_network(self):
+        super()._make_network()
+        self.base_model = self.params.model_params.cls(self.params.model_params)
+        self.proj = self.params.projection_params.cls(self.params.projection_params)
+        if self.params.use_angular_supcon_loss:
+            self.lossfn = AngularSupConLoss(base_temperature=self.params.supcon_loss_temperature, temperature=self.params.supcon_loss_temperature, margin=self.params.angular_supcon_loss_margin)
+        else:
+            self.lossfn = SupConLoss(base_temperature=self.params.supcon_loss_temperature, temperature=self.params.supcon_loss_temperature)
+    
+    def _get_proj(self, z):
+        if not isinstance(self.proj, IdentityLayer):
+            p = self.proj(z)
+            p = nn.functional.normalize(p)
+        else:
+            p = z
+        return p
+    
+    def _get_feats(self, x):
+        z = self.base_model._get_feats(x)
+        z = nn.functional.normalize(z)
+        return z
+    
+    def _run_classifier(self, x):
+        return self.base_model._run_classifier(x)
+    
+    def forward(self, x):
+        return self._run_classifier(self._get_feats(x)) 
+    
+    def compute_loss(self, x, y, return_logits=True):
+        if x.dim() == 5:
+            x = rearrange(x, 'b n c h w -> (n b) c h w')
+        feat = self._get_feats(x)
+        proj = self._get_proj(feat)
+        logits = self._run_classifier(feat.detach())
+
+        proj = rearrange(proj, '(n b) d -> b n d', b=y.shape[0])
+        logits = rearrange(logits, '(n b) d -> b n d', b=y.shape[0])
+
+        loss1 = self.lossfn(proj, y)
+        
+        loss2 = 0
+        for i in range(logits.shape[1]):
+            loss2 += nn.functional.cross_entropy(logits[:, i], y)
+        loss2 /= logits.shape[1]
+        loss = loss1 + loss2
+
+        logits = logits.mean(1)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+class XResNet34(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        common_params: CommonModelParams = field(factory=CommonModelParams)
+        normalize_input: bool = True
+        setup_feature_extraction: bool = False
+        setup_classification: bool = True
+        num_classes: int = None
+
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.params: XResNet34.ModelParams = params
+        self._make_network()
+
+    def _make_network(self):
+        self.resnet = xresnet34(p=self.params.common_params.dropout_p,
+                                    c_in=self.params.common_params.input_size[0],
+                                    n_out=self.params.common_params.num_units,
+                                    act_cls=self.params.common_params.activation,
+                                )
+        self.resnet[-1] = nn.Identity()
+        if self.params.setup_classification:
+            x = self.resnet(torch.rand(1, *(self.params.common_params.input_size)))
+            self.classifier = nn.Linear(x.shape[1], self.params.num_classes)
+
+    def _get_feats(self, x, **kwargs):
+        if self.params.normalize_input:
+            x = (x - 0.5)/0.5
+        feat = self.resnet(x)
+        return feat
+    
+    def _run_classifier(self, x):
+        return self.classifier(x)
+    
+    def forward(self, x):
+        return self._run_classifier(self._get_feats(x))
+    
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        if self.params.setup_classification:
+            loss = nn.functional.cross_entropy(logits, y)
+        else:
+            loss = torch.tensor(0., device=x.device)
+        output = (loss,)
         if return_logits:
             output = (logits,) + output
         return output
