@@ -1,12 +1,12 @@
 from argparse import ArgumentParser
 from importlib import import_module
 import os
-from mllib.runners.base_runners import BaseRunner
+from time import time
 from mllib.tasks.base_tasks import AbstractTask
 import numpy as np
 import torch
 import evaluation_tasks as eval
-from adversarialML.biologically_inspired_models.src.runners import AdversarialAttackBatteryRunner, AdversarialExperimentConfig, AdversarialExperimentRunner, ConsistentActivationAdversarialExperimentConfig, ConsistentActivationAdversarialExperimentRunner
+from adversarialML.biologically_inspired_models.src.runners import AdversarialAttackBatteryRunner, AdversarialExperimentRunner, RandomizedSmoothingRunner
 from utils import get_model_checkpoint_paths
 
 def load_model_from_ckpdir(d):
@@ -30,9 +30,10 @@ if __name__ == '__main__':
     parser.add_argument('--eval_only', action='store_true')
     parser.add_argument('--prune_and_test', action='store_true')
     parser.add_argument('--run_adv_attack_battery', action='store_true')
+    parser.add_argument('--run_randomized_smoothing_eval', action='store_true')
     args = parser.parse_args()
 
-    # s = 9999
+    # s = time()
     # np.random.seed(s)
     # torch.manual_seed(s)
     # torch.cuda.manual_seed(s)
@@ -41,21 +42,32 @@ if __name__ == '__main__':
     task: AbstractTask = task_cls()
     exp_params = task.get_experiment_params()
     if args.run_adv_attack_battery:
-        task = eval.get_adversarial_battery_task(task_cls, 1000, 128, 
-                                                    {'APGD': eval.get_apgd_atk, 
+        task = eval.get_adversarial_battery_task(task_cls, 1000, 256, 
+                                                    {
+                                                      'APGD': eval.get_apgd_atk, 
                                                         # 'APGD_EOT20': eval.get_eot20_apgd_atk,
-                                                        'APGD_EOT50': eval.get_eot50_apgd_atk,
+                                                        # 'APGD_EOT50': eval.get_eot50_apgd_atk,
                                                         # 'APGD_Transfer_MM8L':eval.get_transfered_atk(
                                                         # '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
                                                         # 'Cifar10AutoAugmentMLPMixer8LTask-50K/4/'
                                                         # 'checkpoints/model_checkpoint.pt', eval.get_apgd_atk
                                                         # ),
+                                                        # 'APGD_Transfer_SC_LP_MM8L':eval.get_transfered_atk(
+                                                        # '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
+                                                        # 'Cifar10AutoAugmentSupConLinearProjMLPMixer8LTask-50K/0/'
+                                                        # 'checkpoints/model_checkpoint.pt', eval.get_apgd_atk
+                                                        # ),
+                                                        # 'Square': eval.get_square_atk,
+                                                        # 'CWL2': eval.get_cwl2_atk
                                                     }
-                                                    , [0., 0.008, 0.016, 0.024, 0.032])()
+                                                    # , [0., 0.008, 0.016, 0.024, 0.032]
+                                                    ,[0, 0.9]
+                                                    )()
         runner_cls = AdversarialAttackBatteryRunner
-    elif isinstance(exp_params, ConsistentActivationAdversarialExperimentConfig):
-        runner_cls = ConsistentActivationAdversarialExperimentRunner
-    elif isinstance(exp_params, AdversarialExperimentConfig):
+    elif args.run_randomized_smoothing_eval:
+        task = eval.get_randomized_smoothing_task(task_cls, 512, [0.125], 128, rs_batch_size=1024*10)()
+        runner_cls = RandomizedSmoothingRunner
+    else:
         runner_cls = AdversarialExperimentRunner
     if args.ckp is not None:
         if os.path.isdir(args.ckp):
