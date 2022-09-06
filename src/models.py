@@ -12,7 +12,7 @@ import torchvision
 
 from adversarialML.biologically_inspired_models.src.model_utils import _make_first_dim_last, _make_last_dim_first, merge_strings, mm, str_to_act_and_dact_fn, _compute_conv_output_shape
 from adversarialML.biologically_inspired_models.src.supconloss import SupConLoss, AngularSupConLoss
-from fastai.vision.models.xresnet import xresnet34
+from fastai.vision.models.xresnet import xresnet34, xresnet18
 from einops import rearrange
 from fastai.layers import ResBlock
 @define(slots=False)
@@ -1192,3 +1192,15 @@ class XResNet34(AbstractModel):
         if return_logits:
             output = (logits,) + output
         return output
+
+class XResNet18(XResNet34):
+    def _make_network(self):
+        self.resnet = xresnet18(p=self.params.common_params.dropout_p,
+                                    c_in=self.params.common_params.input_size[0],
+                                    n_out=self.params.common_params.num_units,
+                                    act_cls=self.params.common_params.activation,
+                                )
+        self.resnet[-1] = nn.Identity()
+        if self.params.setup_classification:
+            x = self.resnet(torch.rand(1, *(self.params.common_params.input_size)))
+            self.classifier = nn.Linear(x.shape[1], self.params.num_classes)
