@@ -5,6 +5,7 @@ from typing import List, Literal, Type, Union, Tuple
 from attrs import define, field
 from mllib.trainers.base_trainers import Trainer as _Trainer
 from mllib.trainers.base_trainers import MixedPrecisionTrainerMixin
+from mllib.runners.configs import TrainingParams
 from mllib.utils.metric_utils import compute_accuracy, get_preds_from_logits
 from mllib.param import BaseParameters
 from numpy import iterable
@@ -27,15 +28,15 @@ class AdversarialParams:
 class AdversarialTrainer(_Trainer, PruningMixin):    
     @define(slots=False)    
     class AdversarialTrainerParams(BaseParameters):
-        trainer_params: Type[_Trainer.TrainerParams] = field(factory=lambda: _Trainer.TrainerParams(None))
+        training_params: Type[TrainingParams] = field(factory=TrainingParams)
         adversarial_params: Type[AdversarialParams] = field(factory=AdversarialParams)
 
     @classmethod
     def get_params(cls):
         return cls.AdversarialTrainerParams(cls)
 
-    def __init__(self, params: AdversarialTrainerParams):
-        super().__init__(params.trainer_params)
+    def __init__(self, params: AdversarialTrainerParams, *args, **kwargs):
+        super().__init__(params, *args, **kwargs)
         print(self.model)
         self.params = params
         self.training_adv_attack = self._maybe_get_attacks(params.adversarial_params.training_attack_params)
@@ -175,6 +176,9 @@ class AdversarialTrainer(_Trainer, PruningMixin):
             elif not iterable(v):
                 self.logger.add_scalar(k, v, global_step=step)
 
+class MixedPrecisionAdversarialTrainer(MixedPrecisionTrainerMixin, AdversarialTrainer):
+    pass
+
 class ActivityOptimizationSchedule(Enum):
     CONST = auto()
     GEOM = auto()
@@ -187,19 +191,18 @@ class ActivityOptimizationParams:
     num_warmup_epochs: int = 5
 
 class ConsistentActivationModelAdversarialTrainer(AdversarialTrainer):
+    @define(slots=False)
     class ConsistentActivationModelAdversarialTrainerParams(BaseParameters):
-        def __init__(self, cls):
-            super().__init__(cls)
-            self.trainer_params: Type[_Trainer.TrainerParams] = _Trainer.TrainerParams(None)
-            self.adversarial_params: Type[AdversarialParams] = AdversarialParams
-            self.act_opt_params: ActivityOptimizationParams = ActivityOptimizationParams()
+        training_params: Type[TrainingParams] = field(factory=TrainingParams)
+        adversarial_params: Type[AdversarialParams] = field(factory=AdversarialParams)
+        act_opt_params: ActivityOptimizationParams = field(factory=ActivityOptimizationParams)
     
     @classmethod
     def get_params(cls):
         return cls.ConsistentActivationModelAdversarialTrainerParams(cls)
 
-    def __init__(self, params: ConsistentActivationModelAdversarialTrainerParams):
-        super().__init__(params)
+    def __init__(self, params: ConsistentActivationModelAdversarialTrainerParams, *args, **kwargs):
+        super().__init__(params, *args, **kwargs)
         self.params = params
         self._load_max_act_opt_lrs()
 
@@ -249,8 +252,8 @@ def update_and_save_logs(logdir, outfilename, load_fn, write_fn, save_fn, *save_
         save_fn(*save_fn_args, **save_fn_kwargs)
 
 class MultiAttackEvaluationTrainer(AdversarialTrainer):
-    def __init__(self, params):
-        super().__init__(params)
+    def __init__(self, params, *args, **kwargs):
+        super().__init__(params, *args, **kwargs)
         self.metrics_filename = 'adv_metrics.json'
         self.data_and_pred_filename = 'adv_data_and_preds.pkl'
 
@@ -356,11 +359,11 @@ class RandomizedSmoothingParams:
 class RandomizedSmoothingEvaluationTrainer(_Trainer):
     @define(slots=False)    
     class TrainerParams(BaseParameters):
-        trainer_params: Type[_Trainer.TrainerParams] = field(factory=lambda: _Trainer.TrainerParams(None))
+        training_params: Type[TrainingParams] = field(factory=TrainingParams)
         randomized_smoothing_params: RandomizedSmoothingParams = field(factory=RandomizedSmoothingParams)
     
-    def __init__(self, params: TrainerParams):
-        super().__init__(params.trainer_params)
+    def __init__(self, params: TrainerParams, *args, **kwargs):
+        super().__init__(params, *args, **kwargs)
         self.params = params
         self.smoothed_models = [Smooth(self.model, self.params.randomized_smoothing_params.num_classes, s) for s in self.params.randomized_smoothing_params.sigmas]
         self.metrics_filename = 'randomized_smoothing_metrics.json'
