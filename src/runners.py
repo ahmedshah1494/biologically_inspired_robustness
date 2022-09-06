@@ -5,6 +5,7 @@ from mllib.runners.base_runners import BaseRunner
 import torch
 from mllib.datasets.dataset_factory import SupportedDatasets
 from adversarialML.biologically_inspired_models.src.utils import write_pickle
+import webdataset as wds
 
 class AdversarialExperimentRunner(BaseRunner):
     def create_model(self) -> torch.nn.Module:
@@ -21,6 +22,28 @@ class AdversarialExperimentRunner(BaseRunner):
                 else:
                     print(f'keeping {n} from model')
         return model
+    
+    def create_dataloaders(self):
+        train_dataset, val_dataset, test_dataset = self.create_datasets()
+        p = self.task.get_experiment_params()
+        
+        ds = self.task.get_dataset_params().dataset
+        if ds in [SupportedDatasets.IMAGENET, SupportedDatasets.IMAGENET100]:
+            num_workers = 16
+
+            train_dataset = train_dataset.batched(p.batch_size, partial=False)
+            val_dataset = val_dataset.batched(p.batch_size, partial=False)
+            test_dataset = test_dataset.batched(p.batch_size, partial=False)
+
+            train_loader = wds.WebLoader(train_dataset, batch_size=None, shuffle=False, num_workers=num_workers).with_length(len(train_dataset) // p.batch_size)
+            val_loader = wds.WebLoader(val_dataset, batch_size=None, shuffle=False, num_workers=num_workers).with_length(len(val_dataset) // p.batch_size)
+            test_loader = wds.WebLoader(test_dataset, batch_size=None, shuffle=False, num_workers=num_workers).with_length(len(test_dataset) // p.batch_size)
+        else:
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=p.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=p.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=p.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+
+        return train_loader, val_loader, test_loader
         
     def get_experiment_dir(self, logdir, exp_name):
         def is_exp_complete(i):
