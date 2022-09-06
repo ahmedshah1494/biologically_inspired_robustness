@@ -181,7 +181,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
 
     
     def __repr__(self):
-        return f'RetinaBlurFilter(cone_std={self.cone_std}, rod_std={self.rod_std}, max_rod_density={self.max_rod_density}, kernel_size={self.kernel_size})'
+        return f'RetinaBlurFilter(loc_mode={self.params.loc_mode}, cone_std={self.cone_std}, rod_std={self.rod_std}, max_rod_density={self.max_rod_density}, kernel_size={self.kernel_size})'
     
     def prob2std(self, p):
         s = 1.5*(1-p) + 1e-5
