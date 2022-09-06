@@ -8,7 +8,7 @@ from adversarialML.biologically_inspired_models.src.mlp_mixer_models import (
     NormalizationLayer, UnfoldPatchExtractor)
 from adversarialML.biologically_inspired_models.src.models import (
     ConsistentActivationLayer, ConvEncoder, GeneralClassifier, IdentityLayer,
-    ScanningConsistentActivationLayer, SequentialLayers, XResNet34, SupervisedContrastiveTrainingWrapper)
+    ScanningConsistentActivationLayer, SequentialLayers, XResNet34, XResNet18, SupervisedContrastiveTrainingWrapper)
 from adversarialML.biologically_inspired_models.src.retina_preproc import (
     AbstractRetinaFilter, RetinaBlurFilter, RetinaNonUniformPatchEmbedding,
     RetinaSampleFilter)
@@ -45,6 +45,78 @@ def get_tiny_imagenet_params(num_train=100_000, num_test=10_000):
     p = ImageDatasetFactory.get_params()
     p.dataset = SupportedDatasets.TINY_IMAGENET
     p.datafolder = '/home/mshah1/workhorse3/tiny-imagenet-200/bin/'
+    p.max_num_train = num_train
+    p.max_num_test = num_test
+    return p
+
+def get_random_crop_flip_transforms(size, padding):
+    return [
+        torchvision.transforms.RandomCrop(size, padding=padding, padding_mode='reflect'),
+        torchvision.transforms.RandomHorizontalFlip()
+    ]
+
+def get_resize_crop_flip_transforms(size, padding):
+    return [
+        torchvision.transforms.Resize(size),
+        *(get_random_crop_flip_transforms(size, padding))
+    ]
+
+def get_resize_crop_flip_autoaugment_transforms(size, padding, profile):
+    return [
+        *(get_resize_crop_flip_transforms(size, padding)),
+        torchvision.transforms.AutoAugment(profile)
+    ]
+
+def get_dataset_params(datafolder, dataset, num_train=13_000, num_test=500, train_transforms=[], test_transforms=[]):
+    p = ImageDatasetFactory.get_params()
+    p.dataset = dataset
+    p.datafolder = datafolder
+    p.max_num_train = num_train
+    p.max_num_test = num_test
+    train_transforms.append(torchvision.transforms.ToTensor())
+    test_transforms.append(torchvision.transforms.ToTensor())
+    p.custom_transforms = (
+        torchvision.transforms.Compose(train_transforms) if len(train_transforms) > 1 else train_transforms[0],
+        torchvision.transforms.Compose(test_transforms) if len(test_transforms) > 1 else test_transforms[0]
+    )
+    return p
+
+def get_imagenet10_params(num_train=13_000, num_test=500, train_transforms=[], test_transforms=[]):
+    p = ImageDatasetFactory.get_params()
+    p.dataset = SupportedDatasets.IMAGENET10
+    p.datafolder = '/home/mshah1/workhorse3/imagenet-10/bin/'
+    p.max_num_train = num_train
+    p.max_num_test = num_test
+    train_transforms.append(torchvision.transforms.ToTensor())
+    test_transforms.append(torchvision.transforms.ToTensor())
+    p.custom_transforms = (
+        torchvision.transforms.Compose(train_transforms) if len(train_transforms) > 1 else train_transforms[0],
+        torchvision.transforms.Compose(test_transforms) if len(test_transforms) > 1 else test_transforms[0]
+    )
+    return p
+
+def get_imagenet100_params(num_train=25, num_test=1, train_transforms=[], test_transforms=[]):
+    p = ImageDatasetFactory.get_params()
+    p.dataset = SupportedDatasets.IMAGENET100
+    p.datafolder = '/home/mshah1/workhorse3/imagenet-100/shards/'
+    p.max_num_train = num_train
+    p.max_num_test = num_test
+    train_transforms.append(torchvision.transforms.ToTensor())
+    test_transforms.append(torchvision.transforms.ToTensor())
+    p.custom_transforms = (
+        torchvision.transforms.Compose(train_transforms) if len(train_transforms) > 1 else train_transforms[0],
+        torchvision.transforms.Compose(test_transforms) if len(test_transforms) > 1 else test_transforms[0]
+    )
+    return p
+
+def get_imagenet100_64_params(num_train=127500, num_test=5000, train_transforms=[], test_transforms=[]):
+    return get_dataset_params('/home/mshah1/workhorse3/imagenet-100/bin/64', SupportedDatasets.IMAGENET100_64, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_imagenet_params(num_train=float('inf'), num_test=float('inf')):
+    p = ImageDatasetFactory.get_params()
+    p.dataset = SupportedDatasets.IMAGENET
+    p.datafolder = '/home/mshah1/workhorse3/imagenet/shards2/'
     p.max_num_train = num_train
     p.max_num_test = num_test
     return p
@@ -109,6 +181,7 @@ class Cifar10AutoAugmentMLPMixerTask(AbstractTask):
     mlpc_hidden = 512
     mlps_hidden = 64
     nclasses = 10
+    dropout_p = 0.
 
     def _get_n_patches(self):
         return (self.input_size[1] // self.patch_size)**2
@@ -159,7 +232,7 @@ class Cifar10AutoAugmentMLPMixerTask(AbstractTask):
     def _get_mlpc_params(self):
         mlpc_params: MixerMLP.ModelParams = MixerMLP.get_params()
         mlpc_params.common_params.activation = nn.GELU
-        mlpc_params.common_params.dropout_p = 0.
+        mlpc_params.common_params.dropout_p = self.dropout_p
         mlpc_params.common_params.input_size = [self.hidden_size]
         mlpc_params.common_params.num_units = self.mlpc_hidden
         return mlpc_params
@@ -168,7 +241,7 @@ class Cifar10AutoAugmentMLPMixerTask(AbstractTask):
         n_patches = self._get_n_patches()
         mlps_params: MixerMLP.ModelParams = MixerMLP.get_params()
         mlps_params.common_params.activation = nn.GELU
-        mlps_params.common_params.dropout_p = 0.
+        mlps_params.common_params.dropout_p = self.dropout_p
         mlps_params.common_params.input_size = [n_patches]
         mlps_params.common_params.num_units = self.mlps_hidden
         return mlps_params
@@ -289,6 +362,15 @@ class Cifar10AutoAugmentAngularSupConMLPMixer8LAdvTrainTask(FastAdversarialTrain
     pass
 class Cifar10AutoAugmentAngularSupConLinearProjMLPMixer8LAdvTrainTask(FastAdversarialTrainingMixin, AngularSupConModelMixin, SupConLinearProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentMLPMixer8LTask):
     pass
+
+def add_retina_blur_to_mlp_mixer(cnn_params, input_size, cone_std=0.12, rod_std=0.06, max_rod_density=0.12, kernel_size=9, mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616]):
+    rblur = RetinaBlurFilter.ModelParams(RetinaBlurFilter, input_size, cone_std=cone_std, rod_std=rod_std, max_rod_density=max_rod_density, kernel_size=9)
+    norm = NormalizationLayer.ModelParams(NormalizationLayer, [0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616])
+    p: SequentialLayers.ModelParams = SequentialLayers.get_params()
+    p.common_params.input_size = input_size
+    p.common_params.activation = nn.Identity
+    p.layer_params = [rblur, norm, cnn_params]
+    return p
 
 class Cifar10AutoAugmentwRetinaBlurMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
     def _get_patch_params(self):
@@ -527,19 +609,137 @@ class Cifar10AutoAugmentCAMLPMixer1LTask(Cifar10AutoAugmentCAMLPMixerTask):
 class Cifar10AutoAugmentCAMLPMixer8LTask(Cifar10AutoAugmentCAMLPMixerTask):
     num_blocks = 8
 
+class Imagenet10AutoAugmentMLPMixer8LTask(Cifar10AutoAugmentMLPMixerTask):
+    nclasses = 10
+    input_size = [3, 64, 64]
+    patch_size = 8
+    num_blocks = 8
+    def get_dataset_params(self):
+        p = get_imagenet10_params(
+            train_transforms=get_resize_crop_flip_autoaugment_transforms(64, 8, torchvision.transforms.AutoAugmentPolicy.IMAGENET), 
+            test_transforms=[torchvision.transforms.Resize(64)]
+        )
+        return p
+    
+    def _get_mlpc_params(self):
+        p = super()._get_mlpc_params()
+        p.common_params.dropout_p = 0.2
+        return p
+    
+    def _get_mlps_params(self):
+        p = super()._get_mlps_params()
+        p.common_params.dropout_p = 0.2
+        return p
+    
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        p.optimizer_config.weight_decay = 5e-5
+        return p
+
+class Imagenet10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask(Imagenet10AutoAugmentMLPMixer8LTask):
+    def _get_patch_params(self):
+        rblur = _get_retina_nonuniform_patch_embedding_params(self.input_size, self.hidden_size)
+        return rblur
+    
+    def _get_n_patches(self):
+        return 80
+    
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        for ap in p.trainer_params.adversarial_params.testing_attack_params:
+            ap.eot_iter = 10
+        return p
+
+class Imagenet10AutoAugmentwRetinaBlurMLPMixer8LTask(Imagenet10AutoAugmentMLPMixer8LTask):
+    def _get_patch_params(self):
+        cnn_params = super()._get_patch_params()
+        p = add_retina_blur_to_mlp_mixer(cnn_params, self.input_size, mean=[0.4859096 , 0.45802493, 0.41048576], std=[0.26711284, 0.25818977, 0.26970135])
+        return p
+    
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        for ap in p.trainer_params.adversarial_params.testing_attack_params:
+            ap.eot_iter = 10
+        return p
+
+class Imagenet100AutoAugmentMLPMixer8LTask(Cifar10AutoAugmentMLPMixerTask):
+    nclasses = 100
+    input_size = [3, 64, 64]
+    patch_size = 8
+    num_blocks = 8
+    def get_dataset_params(self):
+        p = get_imagenet100_64_params(
+            train_transforms=get_resize_crop_flip_autoaugment_transforms(64, 8, torchvision.transforms.AutoAugmentPolicy.IMAGENET),
+            test_transforms=[torchvision.transforms.Resize(64)]
+        )
+        return p
+    
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        p.optimizer_config.weight_decay = 5e-5
+        p.batch_size = 128
+        p.exp_name = ''
+        return p
+
+class Imagenet100AutoAugmentMLPMixer8L2xUnitsTask(Imagenet100AutoAugmentMLPMixer8LTask):
+    hidden_size = Imagenet100AutoAugmentMLPMixer8LTask.hidden_size * 2
+    mlpc_hidden = Imagenet100AutoAugmentMLPMixer8LTask.mlpc_hidden * 2
+    mlps_hidden = Imagenet100AutoAugmentMLPMixer8LTask.mlps_hidden * 2
+    dropout_p = 0.2
+
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        p.optimizer_config.weight_decay = 5e-4
+        return p
+
+class Imagenet100AutoAugmentMLPMixer8L512HiddenTask(Imagenet100AutoAugmentMLPMixer8LTask):
+    hidden_size=512
+
+class Imagenet100AutoAugmentAdamCyclicLRMLPMixer8L512HiddenTask(Imagenet100AutoAugmentMLPMixer8L512HiddenTask):
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        p.scheduler_config = CyclicLRConfig(base_lr=1e-6, max_lr=0.003, step_size_up=1000*5, step_size_down=1000*10, cycle_momentum=False)
+        p.trainer_params.training_params.scheduler_step_after_epoch = False
+        return p
+
+class Imagenet100AutoAugmentwRetinaBlurAdamCyclicLRMLPMixer8L512HiddenTask(Imagenet100AutoAugmentAdamCyclicLRMLPMixer8L512HiddenTask):
+    def _get_patch_params(self):
+        cnn_params = super()._get_patch_params()
+        p = add_retina_blur_to_mlp_mixer(cnn_params, self.input_size, mean=[0.4859096 , 0.45802493, 0.41048576], std=[0.26711284, 0.25818977, 0.26970135])
+        return p
+
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        for ap in p.trainer_params.adversarial_params.testing_attack_params:
+            ap.eot_iter = 10
+        return p
+
+class Imagenet100AutoAugmentwRetinaNonUniformPatchEmbeddingAdamCyclicLRMLPMixer8L512HiddenTask(Imagenet100AutoAugmentAdamCyclicLRMLPMixer8L512HiddenTask):
+    def _get_patch_params(self):
+        rblur = _get_retina_nonuniform_patch_embedding_params(self.input_size, self.hidden_size)
+        return rblur
+    
+    def _get_n_patches(self):
+        return 80
+    
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        for ap in p.trainer_params.adversarial_params.testing_attack_params:
+            ap.eot_iter = 10
+        return p
+
 class TinyImagenetAutoAugmentMLPMixer8LTask(Cifar10AutoAugmentMLPMixerTask):
     nclasses = 200
     input_size = [3, 64, 64]
     patch_size = 8
     num_blocks = 8
     def get_dataset_params(self):
-        p = get_tiny_imagenet_params(num_train=100_000)
+        p = get_tiny_imagenet_params(num_train=100_000, num_test=2000)
         p.custom_transforms = (
             torchvision.transforms.Compose([
                 torchvision.transforms.RandomCrop(64, padding=8, padding_mode='reflect'),
                 torchvision.transforms.RandomHorizontalFlip(),
                 torchvision.transforms.AutoAugment(torchvision.transforms.AutoAugmentPolicy.IMAGENET),
-                # torchvision.transforms.RandAugment(magnitude=15),
                 torchvision.transforms.ToTensor()
             ]),
             torchvision.transforms.ToTensor()
@@ -569,7 +769,7 @@ class TinyImagenetAutoAugmentMLPMixerS8Task(TinyImagenetAutoAugmentMLPMixer8LTas
     def get_experiment_params(self):
         p = super().get_experiment_params()
         p.trainer_params.cls = MixedPrecisionAdversarialTrainer
-        p.optimizer_config.lr = 0.003
+        p.optimizer_config.lr = 0.001
         return p
 
 class TinyImagenetMLPMixer8LTask(Cifar10AutoAugmentMLPMixerTask):
@@ -631,6 +831,68 @@ class TinyImagenetAutoAugmentCyclicMLPMixerS8Task(SGDCyclicLRMixin, TinyImagenet
         p.scheduler_config.gamma = 0.99997
         p.optimizer_config.weight_decay = 5e-5
         return p
+
+class TinyImagenetAutoAugmentwRetinaNonUniformPatchEmbeddingCyclicMLPMixerS8Task(TinyImagenetAutoAugmentCyclicMLPMixerS8Task):
+    def _get_patch_params(self):
+        rblur = _get_retina_nonuniform_patch_embedding_params(self.input_size, self.hidden_size)
+        return rblur
+
+    def _get_n_patches(self):
+        return 80
+
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        for ap in p.trainer_params.adversarial_params.testing_attack_params:
+            ap.eot_iter = 10
+        return p
+
+class TinyImagenetAutoAugmentwCenteredRetinaNonUniformPatchEmbeddingCyclicMLPMixerS8Task(CenterLocModeMixin, TinyImagenetAutoAugmentwRetinaNonUniformPatchEmbeddingCyclicMLPMixerS8Task):
+    pass
+
+class TinyImagenetAutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixerS8Task(TinyImagenetAutoAugmentMLPMixerS8Task):
+    def _get_patch_params(self):
+        rblur = _get_retina_nonuniform_patch_embedding_params(self.input_size, self.hidden_size)
+        return rblur
+
+    def _get_n_patches(self):
+        return 80
+
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        for ap in p.trainer_params.adversarial_params.testing_attack_params:
+            ap.eot_iter = 10
+        return p
+
+class TinyImagenetAutoAugmentwRetinaBlurCyclicMLPMixerS8Task(TinyImagenetAutoAugmentCyclicMLPMixerS8Task):
+    def _get_patch_params(self):
+        cnn_params = super()._get_patch_params()
+        p = add_retina_blur_to_mlp_mixer(cnn_params, self.input_size, mean=[0.48024579, 0.44807218, 0.39754775], std=[0.27698641, 0.26906449, 0.28208191])
+        return p
+
+    def get_model_params(self):
+        p = super().get_model_params()
+        p.normalize_input = False
+        return p
+
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        for ap in p.trainer_params.adversarial_params.testing_attack_params:
+            ap.eot_iter = 10
+        return p
+
+class TinyImagenetAutoAugmentwCenteredRetinaBlurCyclicMLPMixerS8Task(CenterLocModeMixin, TinyImagenetAutoAugmentwRetinaBlurCyclicMLPMixerS8Task):
+    pass
+
+
+class TinyImagenetAutoAugmentwRetinaBlurCyclicMLPMixerS8WD5e_4Task(TinyImagenetAutoAugmentwRetinaBlurCyclicMLPMixerS8Task):
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        p.optimizer_config.weight_decay = 5e-4
+        return p
+
+class TinyImagenetAutoAugmentwCenteredRetinaBlurCyclicMLPMixerS8WD5e_4Task(CenterLocModeMixin, TinyImagenetAutoAugmentwRetinaBlurCyclicMLPMixerS8WD5e_4Task):
+    pass
+
 
 class TinyImagenetAutoAugmentCyclicMLPMixerS8WD1e_4Task(TinyImagenetAutoAugmentCyclicMLPMixerS8Task):
     def get_experiment_params(self):
@@ -800,3 +1062,84 @@ class TinyImagenetXResNet34(TinyImagenetRandAugmentXResNet34):
 
 class TinyImagenetCyclicLRXResNet34(SGDCyclicLRMixin,TinyImagenetXResNet34):
     pass
+
+class TinyImagenetAutoAugmentXResNet18(TinyImagenetAutoAugmentXResNet34):
+    def get_model_params(self):
+        p = super().get_model_params()
+        p.cls = XResNet18
+        p.common_params.dropout_p = 0.
+        return p
+    
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        p.optimizer_config.weight_decay = 1e-5
+        p.batch_size = 256
+        return p
+
+class TinyImagenetAutoAugmentCyclicLRXResNet18(SGDCyclicLRMixin,TinyImagenetAutoAugmentXResNet18):
+    pass
+
+class ImagenetAutoAugmentXResNet34(TinyImagenetAutoAugmentXResNet34):
+    input_size = [3, 224, 224]
+    nclasses = 1000
+    def get_dataset_params(self):
+        p = get_imagenet_params(num_train=1281167)
+        p.custom_transforms = (
+            torchvision.transforms.Compose([
+                torchvision.transforms.RandomResizedCrop(224),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.ToTensor()
+            ]),
+            torchvision.transforms.ToTensor()
+        )
+        return p
+    
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        p.batch_size = 4096
+        return p
+
+class ImagenetAutoAugmentCyclicLRXResNet34(SGDCyclicLRMixin,ImagenetAutoAugmentXResNet34):
+    pass
+
+class ImagenetMLPMixerS8Task(Cifar10AutoAugmentMLPMixerTask):
+    input_size = [3, 224, 224]
+    nclasses = 1000
+    patch_size = 16
+    num_blocks = 8
+    hidden_size = 512
+    mlpc_hidden = 2048
+    mlps_hidden = 256
+
+    def get_dataset_params(self):
+        p = get_imagenet_params(num_train=126, num_test=5)
+        p.custom_transforms = (
+            torchvision.transforms.Compose([
+                torchvision.transforms.RandomResizedCrop(224),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15),
+                torchvision.transforms.ToTensor()
+            ]),
+            torchvision.transforms.Compose([
+                torchvision.transforms.Resize(224),
+                torchvision.transforms.CenterCrop(224),
+                torchvision.transforms.ToTensor()
+            ])
+        )
+        return p
+    
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        p.trainer_params.cls = MixedPrecisionAdversarialTrainer
+        p.batch_size = 512
+        return p
+
+class ImagenetCyclicLRMLPMixerS8Task(SGDCyclicLRMixin, ImagenetMLPMixerS8Task):
+    def get_experiment_params(self):
+        p = super().get_experiment_params()
+        p.scheduler_config = CyclicLRConfig(base_lr=1e-6, max_lr=1e-3, step_size_up=10_000, step_size_down=750_000, cycle_momentum=False)
+        p.trainer_params.training_params.scheduler_step_after_epoch = False
+        p.scheduler_config.mode = 'exp_range'
+        p.scheduler_config.gamma = 0.99999
+        p.optimizer_config.weight_decay = 0.01
+        return p
