@@ -293,6 +293,7 @@ class Cifar10AutoAugmentMLPMixerTask(AbstractTask):
         mixer_params.patch_gen_params = patch_params
         mixer_params.mixer_block_params = [deepcopy(block_params) for i in range(self.num_blocks)]
         mixer_params.classifier_params = cls_params
+        mixer_params.normalization_layer_params = NormalizationLayer.ModelParams(NormalizationLayer, [0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616])
         return mixer_params
 
 class Cifar10AutoAugmentMLPMixer8LTask(Cifar10AutoAugmentMLPMixerTask):

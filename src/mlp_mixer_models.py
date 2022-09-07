@@ -30,8 +30,8 @@ class LayerNormLayer(AbstractModel):
 class NormalizationLayer(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
-        mean: Union[float, List[float]] = None
-        std: Union[float, List[float]] = None
+        mean: Union[float, List[float]] = [0.485, 0.456, 0.406]
+        std: Union[float, List[float]] = [0.229, 0.224, 0.225]
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -39,6 +39,9 @@ class NormalizationLayer(AbstractModel):
             self.mean = nn.parameter.Parameter(torch.FloatTensor(self.params.mean).reshape(1,-1,1,1), requires_grad=False)
         if isinstance(self.params.std, list):
             self.std = nn.parameter.Parameter(torch.FloatTensor(self.params.std).reshape(1,-1,1,1), requires_grad=False)
+    
+    def __repr__(self):
+        return f'NormalizationLayer(mean={self.params.mean}, std={self.params.std})'
     
     def forward(self, x):
         return (x-self.mean)/self.std
@@ -131,6 +134,7 @@ class MLPMixer(AbstractModel):
         common_params: CommonModelParams = field(factory=CommonModelParams)
         patch_gen_params: BaseParameters = None
         mixer_block_params: List[MixerBlock.ModelParams] = field(factory=list)
+        normalization_layer_params: BaseParameters = None
         classifier_params: BaseParameters = None
         use_cls_token: bool = False
         normalize_input: bool = True
@@ -162,8 +166,8 @@ class MLPMixer(AbstractModel):
             self.cls_token = nn.parameter.Parameter(torch.empty(1,1,x.shape[-1]).zero_())
         self.classifier = self.params.classifier_params.cls(self.params.classifier_params)
         self.layernorm = nn.LayerNorm(x.shape[-1])
-        self.mean = nn.parameter.Parameter(torch.FloatTensor([0.4914, 0.4822, 0.4465]).reshape(1,3,1,1), requires_grad=False)
-        self.std = nn.parameter.Parameter(torch.FloatTensor([0.2470, 0.2435, 0.2616]).reshape(1,3,1,1), requires_grad=False)
+        if self.params.normalize_input:
+            self.normalization_layer = self.params.normalization_layer_params.cls(self.params.normalization_layer_params)
     
     def _reshape_grid_to_patches(self, x):
         if x.dim() == 4:
@@ -175,7 +179,7 @@ class MLPMixer(AbstractModel):
 
     def _get_patch_emb(self, x):
         if self.params.normalize_input:
-            x = (x - self.mean)/self.std
+            x = self.normalization_layer(x)
         x: torch.Tensor = self.patch_gen(x)
         if isinstance(x, tuple):
             x = x[0]
