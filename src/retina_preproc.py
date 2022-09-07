@@ -17,15 +17,22 @@ from matplotlib.patches import Rectangle
 from einops import rearrange
 from positional_encodings.torch_encodings import PositionalEncodingPermute2D
 
+def convert_image_tensor_to_ndarray(img):
+    return img.cpu().detach().transpose(0,1).transpose(1,2).numpy()
+
 def local_pixel_shuffle(img, kernel_size):
     b, c, h, w = img.shape
     kk = kernel_size**2
+    print(img.shape)
     img_unf = nn.functional.unfold(img, kernel_size, stride=kernel_size)
     b, c_kk, l = img_unf.shape
+    print(img_unf.shape)
     img_unf = rearrange(img_unf, 'b (c kk) l -> (b l c kk)', c=c)
-    perm_idx = np.concatenate([np.random.permutation(kk)+(i*kk) for i in range(b*c*l)], 0)
+    print(img_unf.shape)
+    perm_idx = np.concatenate([(np.repeat(np.random.permutation(kk).reshape(1,-1), c, axis=0) + kk*np.arange(c).reshape(-1,1)).reshape(-1) +(i*(kk*c)) for i in range(b*l)], 0)
     img_unf = img_unf[perm_idx]
     img_unf = rearrange(img_unf, '(b l c kk) -> b (c kk) l', c=c, b=b, kk=kk)
+    print(img_unf.shape)
     img = nn.functional.fold(img_unf, (h, w), kernel_size, stride=kernel_size)
     return img
 
@@ -74,8 +81,8 @@ def _get_gaussian_filtered_image_and_density_mat_pytorch(img, isobox_w, avg_bins
 def _merge_small_bins(hist, bins, min_count):
     new_bins = [bins[-1]]
     new_hist = []
-    running_count = hist[-1]
-    for count, bin_end in zip(hist[::-1][1:], bins[::-1][1:]):
+    running_count = 0
+    for count, bin_end in zip(hist[::-1], bins[::-1][1:]):
         running_count += count
         if running_count >= min_count:
             new_bins.append(bin_end)
@@ -83,25 +90,19 @@ def _merge_small_bins(hist, bins, min_count):
             running_count = 0
     return new_hist[::-1], new_bins[::-1]
 
-def get_isodensity_box_width(probs, nbins):
-    # p = dist_to_prob(domain, scale=scale)
+def get_isodensity_box_width(probs, nbins, min_bincount=2):
     hist, bins = np.histogram(probs, bins=nbins)
-    # print(hist,bins)
-    hist, bins = _merge_small_bins(hist, bins, 2)
-    # bins_ = deepcopy(bins)
-    # # bins_[0] = 0
-    # prob_bin_idxs = np.digitize(probs, bins, right=True)
-    # avg_bins = []
-    # for i in range(len(bins)):
-    #     avg_p = probs[prob_bin_idxs == i].mean()
-    #     avg_bins.append(avg_p)
-    # avg_bins = np.array(avg_bins)
-    # print(hist,bins)
-    # plt.plot(domain, p)
-    # bins[0] = 0
-    avg_bins = np.array([np.min(bins[i:i+2]) if np.min(bins[i:i+2]) < 0.5 else np.max(bins[i:i+2]) for i in range(len(bins)-1)])
-    # avg_bins = bins[1:]
-    # print(hist, bins, avg_bins)
+    hist, bins = _merge_small_bins(hist, bins, min_bincount)
+    avg_bins = []
+    for i in range(len(bins)-1):
+        lo = bins[i]
+        hi = bins[i+1]
+        if i < len(bins) - 2:
+            avg_p = probs[(probs >= lo) & (probs < hi)].mean()
+        else:
+            avg_p = probs[(probs >= lo) & (probs <= hi)].mean()
+        avg_bins.append(avg_p)
+    avg_bins = np.array(avg_bins)
     return np.cumsum(hist[::-1])[::-1], avg_bins, bins
 
 def dist_to_prob(d, scale):
@@ -150,6 +151,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         rod_std: float = None
         max_rod_density: float = None
         kernel_size: int = None
+        scale: float = 0.05
 
     def __init__(self, params, eps=1e-5) -> None:
         super().__init__(params)
@@ -158,6 +160,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         self.rod_std = self.params.rod_std
         self.max_rod_density = self.params.max_rod_density
         self.eps = eps
+        self.scale = self.params.scale
 
         max_dim = max(self.input_shape)
         d = np.arange(max_dim)/max_dim
@@ -184,8 +187,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         return f'RetinaBlurFilter(loc_mode={self.params.loc_mode}, cone_std={self.cone_std}, rod_std={self.rod_std}, max_rod_density={self.max_rod_density}, kernel_size={self.kernel_size})'
     
     def prob2std(self, p):
-        s = 1.5*(1-p) + 1e-5
-        # print(s, p)
+        s = self.scale*max(self.input_shape[1:])*(1-p) + 1e-5
         return s
     
     def _forward_batch(self, img, loc_idx):
@@ -195,15 +197,25 @@ class RetinaBlurFilter(AbstractRetinaFilter):
 
         final_img = (rod_density_mat*gry_filtered_img + cone_density_mat*clr_filtered_img) / (rod_density_mat+cone_density_mat)
         final_img = torch.clamp(final_img, 0, 1.)
-        # i = final_img[0].transpose(0,1).transpose(1,2).cpu().detach().numpy()
-        # plt.figure()
-        # ax = plt.subplot(1,2,1)
-        # ax.imshow(i)
-        # for w in self.clr_isobox_w:
-        #     rect = Rectangle(np.array(loc_idx)+np.array([w, -w]), 2*w, 2*w, linewidth=1, edgecolor='r', facecolor='none')
-        #     ax.add_patch(rect)
-        # ax = plt.subplot(1,2,2)
-        # ax.imshow(img[0].transpose(0,1).transpose(1,2).cpu().detach().numpy())
+        # nplots = 5
+        # print(img[0].min(), img[0].max(), clr_filtered_img[0].min(), clr_filtered_img[0].max(), gry_filtered_img[0].min(), gry_filtered_img[0].max(), final_img[0].min(), final_img[0].max())
+        # f = plt.figure(figsize=(20,nplots))
+        # plt.subplot(1,nplots,1)
+        # plt.title('original')
+        # plt.imshow(convert_image_tensor_to_ndarray(img[0]))
+        # plt.subplot(1,nplots,2)
+        # plt.title('Cone Output')
+        # plt.imshow(convert_image_tensor_to_ndarray(clr_filtered_img[0]))
+        # plt.subplot(1,nplots,3)
+        # plt.title('Rod Output')
+        # plt.imshow(convert_image_tensor_to_ndarray(gry_filtered_img[0]))
+        # plt.subplot(1,nplots,4)
+        # plt.title('Combined Output')
+        # plt.imshow(convert_image_tensor_to_ndarray(final_img[0]))
+        # plt.subplot(1,nplots,5)
+        # # plt.imshow(cone_density_mat[0,0])
+        # plt.plot(np.arange(img.shape[3]), cone_density_mat[0,0, loc_idx[0]].cpu().detach().numpy())
+        # plt.plot(np.arange(img.shape[3]), rod_density_mat[0,0, loc_idx[0]].cpu().detach().numpy())
         # plt.savefig('input.png')
         # plt.close()
         return final_img

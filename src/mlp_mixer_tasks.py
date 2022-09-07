@@ -141,6 +141,26 @@ def set_adv_params(p: AdversarialParams, test_eps):
         return atk_p
     p.testing_attack_params = [eps_to_attack(eps) for eps in test_eps]
 
+def add_retina_blur_to_mlp_mixer(cnn_params, input_size, cone_std=0.12, rod_std=0.06, max_rod_density=0.12, kernel_size=9, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+    rblur = RetinaBlurFilter.ModelParams(RetinaBlurFilter, input_size, cone_std=cone_std, rod_std=rod_std, max_rod_density=max_rod_density, kernel_size=9)
+    norm = NormalizationLayer.ModelParams(NormalizationLayer, mean, std)
+    p: SequentialLayers.ModelParams = SequentialLayers.get_params()
+    p.common_params.input_size = input_size
+    p.common_params.activation = nn.Identity
+    p.layer_params = [rblur, norm, cnn_params]
+    return p
+
+class RetinaBlurMixin(object):
+    def _get_patch_params(self):
+        p = super()._get_patch_params()
+        p = add_retina_blur_to_mlp_mixer(p, self.input_size)
+        return p
+    
+    def get_model_params(self):
+        p = super().get_model_params()
+        p.normalize_input = False
+        return p
+
 class FastAdversarialTrainingMixin(object):
     def get_experiment_params(self):
         atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
@@ -362,15 +382,6 @@ class Cifar10AutoAugmentAngularSupConMLPMixer8LAdvTrainTask(FastAdversarialTrain
     pass
 class Cifar10AutoAugmentAngularSupConLinearProjMLPMixer8LAdvTrainTask(FastAdversarialTrainingMixin, AngularSupConModelMixin, SupConLinearProjModelMixin, SupConSetupMixin, Cifar10AutoAugmentMLPMixer8LTask):
     pass
-
-def add_retina_blur_to_mlp_mixer(cnn_params, input_size, cone_std=0.12, rod_std=0.06, max_rod_density=0.12, kernel_size=9, mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616]):
-    rblur = RetinaBlurFilter.ModelParams(RetinaBlurFilter, input_size, cone_std=cone_std, rod_std=rod_std, max_rod_density=max_rod_density, kernel_size=9)
-    norm = NormalizationLayer.ModelParams(NormalizationLayer, [0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616])
-    p: SequentialLayers.ModelParams = SequentialLayers.get_params()
-    p.common_params.input_size = input_size
-    p.common_params.activation = nn.Identity
-    p.layer_params = [rblur, norm, cnn_params]
-    return p
 
 class Cifar10AutoAugmentwRetinaBlurMLPMixerTask(Cifar10AutoAugmentMLPMixerTask):
     def _get_patch_params(self):
@@ -650,12 +661,7 @@ class Imagenet10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask(Imagene
             ap.eot_iter = 10
         return p
 
-class Imagenet10AutoAugmentwRetinaBlurMLPMixer8LTask(Imagenet10AutoAugmentMLPMixer8LTask):
-    def _get_patch_params(self):
-        cnn_params = super()._get_patch_params()
-        p = add_retina_blur_to_mlp_mixer(cnn_params, self.input_size, mean=[0.4859096 , 0.45802493, 0.41048576], std=[0.26711284, 0.25818977, 0.26970135])
-        return p
-    
+class Imagenet10AutoAugmentwRetinaBlurMLPMixer8LTask(RetinaBlurMixin, Imagenet10AutoAugmentMLPMixer8LTask):
     def get_experiment_params(self):
         p = super().get_experiment_params()
         for ap in p.trainer_params.adversarial_params.testing_attack_params:
@@ -702,12 +708,7 @@ class Imagenet100AutoAugmentAdamCyclicLRMLPMixer8L512HiddenTask(Imagenet100AutoA
         p.trainer_params.training_params.scheduler_step_after_epoch = False
         return p
 
-class Imagenet100AutoAugmentwRetinaBlurAdamCyclicLRMLPMixer8L512HiddenTask(Imagenet100AutoAugmentAdamCyclicLRMLPMixer8L512HiddenTask):
-    def _get_patch_params(self):
-        cnn_params = super()._get_patch_params()
-        p = add_retina_blur_to_mlp_mixer(cnn_params, self.input_size, mean=[0.4859096 , 0.45802493, 0.41048576], std=[0.26711284, 0.25818977, 0.26970135])
-        return p
-
+class Imagenet100AutoAugmentwRetinaBlurAdamCyclicLRMLPMixer8L512HiddenTestTask(RetinaBlurMixin, Imagenet100AutoAugmentAdamCyclicLRMLPMixer8L512HiddenTask):
     def get_experiment_params(self):
         p = super().get_experiment_params()
         for ap in p.trainer_params.adversarial_params.testing_attack_params:
