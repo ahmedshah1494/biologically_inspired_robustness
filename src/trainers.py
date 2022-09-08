@@ -27,15 +27,15 @@ class AdversarialParams:
 
 class AdversarialTrainer(_Trainer, PruningMixin):    
     @define(slots=False)    
-    class AdversarialTrainerParams(BaseParameters):
+    class TrainerParams(BaseParameters):
         training_params: Type[TrainingParams] = field(factory=TrainingParams)
         adversarial_params: Type[AdversarialParams] = field(factory=AdversarialParams)
 
     @classmethod
     def get_params(cls):
-        return cls.AdversarialTrainerParams(cls)
+        return cls.TrainerParams(cls)
 
-    def __init__(self, params: AdversarialTrainerParams, *args, **kwargs):
+    def __init__(self, params: TrainerParams, *args, **kwargs):
         super().__init__(params, *args, **kwargs)
         print(self.model)
         self.params = params
@@ -155,9 +155,13 @@ class AdversarialTrainer(_Trainer, PruningMixin):
             }
         write_pickle(d, os.path.join(self.logdir, self.data_and_pred_filename))
     
+    def save_source_dir(self):
+        shutil.copytree(os.path.dirname(__file__), os.path.join(self.logdir, 'source'))
+    
     def save_logs_after_test(self, train_metrics, test_outputs):
         self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
         self.save_data_and_preds(test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
+        self.save_source_dir()
 
     def test(self):
         test_outputs, test_metrics = self.test_loop(post_loop_fn=self.test_epoch_end)

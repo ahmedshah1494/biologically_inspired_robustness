@@ -67,14 +67,20 @@ def get_resize_crop_flip_autoaugment_transforms(size, padding, profile):
         torchvision.transforms.AutoAugment(profile)
     ]
 
-def get_dataset_params(datafolder, dataset, num_train=13_000, num_test=500, train_transforms=[], test_transforms=[]):
+def get_dataset_params(datafolder, dataset, num_train=13_000, num_test=500, train_transforms=None, test_transforms=None):
     p = ImageDatasetFactory.get_params()
     p.dataset = dataset
     p.datafolder = datafolder
     p.max_num_train = num_train
     p.max_num_test = num_test
-    train_transforms.append(torchvision.transforms.ToTensor())
-    test_transforms.append(torchvision.transforms.ToTensor())
+    if train_transforms is not None:
+        train_transforms.append(torchvision.transforms.ToTensor())
+    else:
+        train_transforms = [torchvision.transforms.ToTensor()]
+    if test_transforms is not None:
+        test_transforms.append(torchvision.transforms.ToTensor())
+    else:
+        test_transforms = [torchvision.transforms.ToTensor()]
     p.custom_transforms = (
         torchvision.transforms.Compose(train_transforms) if len(train_transforms) > 1 else train_transforms[0],
         torchvision.transforms.Compose(test_transforms) if len(test_transforms) > 1 else test_transforms[0]
@@ -662,12 +668,18 @@ class Imagenet10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask(Imagene
             ap.eot_iter = 10
         return p
 
+class Imagenet10AutoAugmentwCenteredRetinaNonUniformPatchEmbeddingMLPMixer8LTask(CenterLocModeMixin, Imagenet10AutoAugmentwRetinaNonUniformPatchEmbeddingMLPMixer8LTask):
+    pass
+
 class Imagenet10AutoAugmentwRetinaBlurMLPMixer8LTask(RetinaBlurMixin, Imagenet10AutoAugmentMLPMixer8LTask):
     def get_experiment_params(self):
         p = super().get_experiment_params()
         for ap in p.trainer_params.adversarial_params.testing_attack_params:
             ap.eot_iter = 10
         return p
+
+class Imagenet10AutoAugmentwCenteredRetinaBlurMLPMixer8LTask(CenterLocModeMixin, Imagenet10AutoAugmentwRetinaBlurMLPMixer8LTask):
+    pass
 
 class Imagenet100AutoAugmentMLPMixer8LTask(Cifar10AutoAugmentMLPMixerTask):
     nclasses = 100

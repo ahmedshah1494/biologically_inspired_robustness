@@ -23,6 +23,24 @@ def get_task_class_from_str(s):
     task_cls = getattr(mod, cls_name)
     return task_cls
 
+attacks =  {
+            'APGD': eval.get_apgd_atk, 
+            'APGD_EOT20': eval.get_eot20_apgd_atk,
+            'APGD_EOT50': eval.get_eot50_apgd_atk,
+            'APGD_Transfer_MM8L':eval.get_transfered_atk(
+            '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
+            'Cifar10AutoAugmentMLPMixer8LTask-50K/4/'
+            'checkpoints/model_checkpoint.pt', eval.get_apgd_atk
+            ),
+            # 'APGD_Transfer_SC_LP_MM8L':eval.get_transfered_atk(
+            # '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
+            # 'Cifar10AutoAugmentSupConLinearProjMLPMixer8LTask-50K/0/'
+            # 'checkpoints/model_checkpoint.pt', eval.get_apgd_atk
+            # ),
+            'Square': eval.get_square_atk,
+            'CWL2': eval.get_cwl2_atk
+        }
+
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--task', type=str, required=True)
@@ -30,8 +48,12 @@ if __name__ == '__main__':
     parser.add_argument('--eval_only', action='store_true')
     parser.add_argument('--prune_and_test', action='store_true')
     parser.add_argument('--run_adv_attack_battery', action='store_true')
+    parser.add_argument('--attacks', nargs='+', type=str, choices=attacks.keys(), default=['APGD'])
+    parser.add_argument('--eps_list', nargs='+', type=float, default=[0., 0.008, 0.016, 0.024])
     parser.add_argument('--run_randomized_smoothing_eval', action='store_true')
     args = parser.parse_args()
+
+    print(args)
 
     # s = time()
     # np.random.seed(s)
@@ -42,26 +64,9 @@ if __name__ == '__main__':
     task: AbstractTask = task_cls()
     exp_params = task.get_experiment_params()
     if args.run_adv_attack_battery:
-        task = eval.get_adversarial_battery_task(task_cls, 1000, 256, 
-                                                    {
-                                                      'APGD': eval.get_apgd_atk, 
-                                                        # 'APGD_EOT20': eval.get_eot20_apgd_atk,
-                                                        # 'APGD_EOT50': eval.get_eot50_apgd_atk,
-                                                        # 'APGD_Transfer_MM8L':eval.get_transfered_atk(
-                                                        # '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
-                                                        # 'Cifar10AutoAugmentMLPMixer8LTask-50K/4/'
-                                                        # 'checkpoints/model_checkpoint.pt', eval.get_apgd_atk
-                                                        # ),
-                                                        # 'APGD_Transfer_SC_LP_MM8L':eval.get_transfered_atk(
-                                                        # '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
-                                                        # 'Cifar10AutoAugmentSupConLinearProjMLPMixer8LTask-50K/0/'
-                                                        # 'checkpoints/model_checkpoint.pt', eval.get_apgd_atk
-                                                        # ),
-                                                        # 'Square': eval.get_square_atk,
-                                                        # 'CWL2': eval.get_cwl2_atk
-                                                    }
-                                                    # , [0., 0.008, 0.016, 0.024, 0.032]
-                                                    ,[0, 0.9]
+        task = eval.get_adversarial_battery_task(task_cls, 2000, 256, 
+                                                   {k:v for k,v in attacks.items() if k in args.attacks},
+                                                    args.eps_list
                                                     )()
         runner_cls = AdversarialAttackBatteryRunner
     elif args.run_randomized_smoothing_eval:
