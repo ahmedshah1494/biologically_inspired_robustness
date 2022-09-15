@@ -4,7 +4,11 @@ from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, Supp
 from mllib.runners.configs import BaseExperimentConfig
 import torch
 
-from adversarialML.biologically_inspired_models.src.trainers import RandomizedSmoothingEvaluationTrainer, MultiAttackEvaluationTrainer
+from trainers import RandomizedSmoothingEvaluationTrainer, MultiAttackEvaluationTrainer
+
+from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter
+from mllib.param import BaseParameters
+import numpy as np
 
 def get_pgd_atk(eps):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
@@ -45,6 +49,27 @@ def get_eot50_apgd_atk(eps):
     p.eot_iter = 50
     return p
 
+def get_apgd_l2_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDL2, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 100
+    return atk_p
+
+def get_eot10_apgd_l2_atk(eps):
+    p = get_apgd_l2_atk(eps)
+    p.eot_iter = 10
+    return p
+
+def get_eot20_apgd_l2_atk(eps):
+    p = get_apgd_l2_atk(eps)
+    p.eot_iter = 20
+    return p
+
+def get_eot50_apgd_l2_atk(eps):
+    p = get_apgd_l2_atk(eps)
+    p.eot_iter = 50
+    return p
+
 def get_square_atk(eps):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.SQUARELINF, SupportedBackend.TORCHATTACKS)
     atk_p.eps = eps
@@ -80,6 +105,8 @@ def get_transfered_atk(src_model_path, atkfn):
 def get_cwl2_atk(conf):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.CWL2, SupportedBackend.FOOLBOX)
     atk_p.confidence = conf
+    atk_p.steps = 100
+    atk_p.run_params.epsilons = [1000.]
     return atk_p
 
 def get_adv_attack_params(atk_types):
@@ -92,12 +119,32 @@ def get_adv_attack_params(atk_types):
     }
     return [atktype_to_paramfn[atkT] for atkT in atk_types]
 
+def set_retina_loc_mode_to_center(p: BaseParameters):
+    if issubclass(p.cls, AbstractRetinaFilter):
+        p.loc_mode = 'center'
+    else:
+        d = p.asdict(recurse=False)
+        for v in d.values():
+            if isinstance(v, BaseParameters):
+                set_retina_loc_mode_to_center(v)
+            elif np.iterable(v):
+                for x in v:
+                    if isinstance(x, BaseParameters):
+                        set_retina_loc_mode_to_center(x)
+    return p
 
-def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, test_eps=[0.0, 0.016, 0.024, 0.032, 0.048, 0.064]):
+def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, test_eps=[0.0, 0.016, 0.024, 0.032, 0.048, 0.064], center_fixation=False):
     class AdversarialAttackBatteryEvalTask(task_cls):
+        _cls = task_cls
         def get_dataset_params(self):
             p = super().get_dataset_params()
             p.max_num_test = num_test
+            return p
+        
+        def get_model_params(self):
+            p = super().get_model_params()
+            if center_fixation:
+                p = set_retina_loc_mode_to_center(p)
             return p
 
         def get_experiment_params(self) -> BaseExperimentConfig:
@@ -108,6 +155,8 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
             adv_config.training_attack_params = None
             atk_params = []
             for name, atkfn in atk_param_fns.items():
+                if center_fixation and isinstance(name, str):
+                    name = 'Centered'+name
                 atk_params += [(name, atkfn(eps)) for eps in test_eps]
             adv_config.testing_attack_params = atk_params
             return p
