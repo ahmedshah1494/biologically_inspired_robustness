@@ -55,10 +55,12 @@ class AdversarialTrainer(_Trainer, PruningMixin):
             if p.model is None:
                 p.model = self.model.eval()
             return name, p._cls(p.model, **(p.asdict()))
+        else:
+            return name, None
 
     def _maybe_get_attacks(self, attack_params: Union[AbstractAttackConfig, List[AbstractAttackConfig]]):
         if attack_params is None:
-            attack = None
+            attack = ('',None)
         else:
             if iterable(attack_params):
                 attack = [self._get_attack_from_params(p) for p in attack_params]
@@ -94,6 +96,8 @@ class AdversarialTrainer(_Trainer, PruningMixin):
                 eps = atk.run_kwargs.get('epsilons', [float('inf')])[0]
             elif isinstance(atk, torchattacks.attack.Attack):
                 eps = atk.eps
+            elif atk is None:
+                eps = 0.
             else:
                 raise NotImplementedError(f'{type(atk)} is not supported')
             x,y = self._maybe_attack_batch(batch, atk)
@@ -156,7 +160,8 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         write_pickle(d, os.path.join(self.logdir, self.data_and_pred_filename))
     
     def save_source_dir(self):
-        shutil.copytree(os.path.dirname(__file__), os.path.join(self.logdir, 'source'))
+        if not os.path.exists(os.path.join(self.logdir, 'source')):
+            shutil.copytree(os.path.dirname(__file__), os.path.join(self.logdir, 'source'))
     
     def save_logs_after_test(self, train_metrics, test_outputs):
         self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
