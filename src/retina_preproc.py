@@ -15,7 +15,6 @@ from attrs import define
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from einops import rearrange
-from positional_encodings.torch_encodings import PositionalEncodingPermute2D
 
 def convert_image_tensor_to_ndarray(img):
     return img.cpu().detach().transpose(0,1).transpose(1,2).numpy()
@@ -324,9 +323,17 @@ class RetinaNonUniformPatchEmbedding(AbstractRetinaFilter):
         mask_small_rf_region: bool = False
         isobox_w: List[int] = None
         rec_flds: List[int] = None
+        conv_stride: int = None
+        conv_padding: Union[int, str] = 0
+        place_crop_features_in_grid: bool = False
+        normalization_layer_params: BaseParameters = None
+        visualize:bool = False
 
-    def __init__(self, params: BaseParameters) -> None:
+    def __init__(self, params) -> None:
         super().__init__(params)
+        if self.params.place_crop_features_in_grid and (self.params.conv_stride != 1) and (self.params.conv_padding != 0):
+            raise ValueError(f'if place_crop_features_in_grid=True then set conv_stride=1 and conv_padding=0, but got conv_stride={self.params.conv_stride} and conv_padding={self.params.conv_padding}')
+            
         self.input_shape = np.array(self.params.input_shape)
         if self.params.isobox_w is None:
             n_isoboxes = int(np.log(min(self.params.input_shape[1:])) + 1 - 1e-5)
@@ -338,8 +345,14 @@ class RetinaNonUniformPatchEmbedding(AbstractRetinaFilter):
         else:
             self.rec_flds = np.array(self.params.rec_flds)
         print(self.isobox_w, self.rec_flds)
-        self.convs = nn.ModuleList([nn.Conv2d(self.params.input_shape[0], self.params.hidden_size, rf, rf) for rf in self.rec_flds])
-        # self.pos_emb = PositionalEncodingPermute2D(3)
+        s = self.params.conv_stride
+        p = self.params.conv_padding
+        self.convs = nn.ModuleList([nn.Conv2d(self.params.input_shape[0], self.params.hidden_size, rf, rf if s is None else s, p) for rf in self.rec_flds])
+        self.visualize = self.params.visualize
+        if self.params.normalization_layer_params is not None:
+            self.normalization_layer = self.params.normalization_layer_params.cls(self.params.normalization_layer_params)
+        else:
+            self.normalization_layer = nn.Identity()
     
     def _get_loc(self):
         if self.params.loc_mode == 'center':
@@ -354,65 +367,103 @@ class RetinaNonUniformPatchEmbedding(AbstractRetinaFilter):
     def _get_name(self):
         return f'RetinaNonUniformPatchEmbedding[hidden_size={self.params.hidden_size}, loc_mode={self.params.loc_mode}{", masked=True" if self.params.mask_small_rf_region else ""}, isobox_w={(self.isobox_w).tolist()}, rec_flds={self.rec_flds.tolist()}]'
     
+    def _get_top_left_coord(self, w, loc_idx):
+        w_l = w // 2
+        top_left = np.array([loc_idx[0]-w_l, loc_idx[1]-w_l])
+        return top_left
+
+    def _pad_crop(self, crop, w, loc_idx):
+        top_left = self._get_top_left_coord(w, loc_idx)
+        top_right = top_left + np.array([0, (w - 1)])
+        bot_left = top_left + np.array([(w - 1), 0])
+        hpad = (max(0, -top_left[1]), max(0, top_right[1]-(self.input_shape[1] - 1)))
+        vpad = (max(0, -top_left[0]), max(0, bot_left[0]-(self.input_shape[2] - 1)))
+        padded_crop = nn.functional.pad(crop, hpad+vpad)
+        return padded_crop
+
+    def _get_or_set_crop(self, x:torch.Tensor, w:int, loc_idx:Tuple[int], mode:Literal['get','set'], pad:bool=False, set_val:float = 0):
+        top_left = self._get_top_left_coord(w, loc_idx)
+        pos_top_left = np.maximum(0, top_left)
+        if mode == 'set':
+            x[:,:, pos_top_left[0]:top_left[0]+w][:,:,:,pos_top_left[1]:top_left[1]+w] = set_val
+        elif mode == 'get':
+            crop = x[:,:, pos_top_left[0]:top_left[0]+w][:,:,:,pos_top_left[1]:top_left[1]+w]
+            if pad:
+                crop = self._pad_crop(crop, w, loc_idx)
+            return crop
+        else:
+            raise ValueError('mode={mode} but must be either "get" or "set"')
+
+    def _get_patch_emb(self, crop, conv, rf, ax):
+        grey_crop = torch.repeat_interleave(crop.mean(1, keepdims=True), 3, 1)
+        crop = (1/rf)*crop + (1 - 1/rf)*grey_crop
+        crop = self.normalization_layer(crop)
+        if self.visualize:
+            ax.imshow(convert_image_tensor_to_ndarray(crop[0]))
+            ax.set_title(f'cropw={crop.shape[2]}\nkernw={rf}')
+        pemb = conv(crop)
+        if not self.params.place_crop_features_in_grid:
+            pemb = rearrange(pemb, 'b c h w -> b (h w) c')
+        return pemb
+    
+    def _place_crop_features_in_grid(self, pembs, loc_idx):
+        pembs = pembs[::-1]
+        g = pembs[0].clone()
+        for pe, w in zip(pembs[1:], self.isobox_w[::-1]):
+            self._get_or_set_crop(g, w, loc_idx, 'set', set_val=pe)
+        return g
+
     def _forward_batch(self, img, loc_idx):
-        # img = img + self.pos_emb(img)
         if loc_idx is None:
             loc_idx = self._get_loc()
 
-        def _get_top_left_coord(w):
-            w_l = w // 2
-            top_left = np.array([loc_idx[0]-w_l, loc_idx[1]-w_l])
-            return top_left
+        if self.visualize:
+            fig, axs = plt.subplots(1, len(self.isobox_w)+2, figsize=(20,5))
+            ax0 = axs[0]
+            img_arr = convert_image_tensor_to_ndarray(img[0])
+            ax0.imshow(img_arr)
+            ax0.scatter([loc_idx[1]], [loc_idx[0]])
+        else:
+            axs = [None]*(len(self.isobox_w)+2)
 
-        def _pad_crop(crop):
-            top_left = _get_top_left_coord(w)
-            top_right = top_left + np.array([0, (w - 1)])
-            bot_left = top_left + np.array([(w - 1), 0])
-            hpad = (max(0, -top_left[1]), max(0, top_right[1]-(self.input_shape[1] - 1)))
-            vpad = (max(0, -top_left[0]), max(0, bot_left[0]-(self.input_shape[2] - 1)))
-            padded_crop = nn.functional.pad(crop, hpad+vpad)
-            return padded_crop
-
-        def _get_or_set_crop(x:torch.Tensor, w:int, mode:Literal['get','set'], pad:bool=False, set_val:float = 0):
-            top_left = _get_top_left_coord(w)
-            pos_top_left = np.maximum(0, top_left)
-            if mode == 'set':
-                x[:,:, pos_top_left[0]:top_left[0]+w][:,:,:,pos_top_left[1]:top_left[1]+w] = set_val
-            elif mode == 'get':
-                crop = x[:,:, pos_top_left[0]:top_left[0]+w][:,:,:,pos_top_left[1]:top_left[1]+w]
-                if pad:
-                    crop = _pad_crop(crop)
-                return crop
-            else:
-                raise ValueError('mode={mode} but must be either "get" or "set"')
-
-        def _get_patch_emb(crop, conv, rf):
-            grey_crop = torch.repeat_interleave(crop.mean(1, keepdims=True), 3, 1)
-            crop = (1/rf)*crop + (1 - 1/rf)*grey_crop
-            pemb = conv(crop)
-            pemb = rearrange(pemb, 'b c h w -> b (h w) c')
-            return pemb
         masked_img = img
         patch_embs = []
         crops = []
-        for w, conv, rf in zip(self.isobox_w, self.convs, self.rec_flds):
-            crop = _get_or_set_crop(masked_img, w, 'get', pad=True)
+        for w, conv, rf, ax in zip(self.isobox_w, self.convs, self.rec_flds, axs[1:]):
+            crop = self._get_or_set_crop(masked_img, w, loc_idx, 'get', pad=True)
+            if self.visualize:
+                top_left = self._get_top_left_coord(w, loc_idx)
+                rect = Rectangle((top_left[1]-0.5, top_left[0]-0.5), w, w, linewidth=1, edgecolor='r', facecolor='none')
+                ax0.add_patch(rect)
             crops.append(crop)
-            pemb = _get_patch_emb(crop, conv, rf)
+            pemb = self._get_patch_emb(crop, conv, rf, ax)
             if self.params.mask_small_rf_region:
                 # b = conv.bias.unsqueeze(0) if conv.bias is not None else 0
                 # nzidx = torch.arange(0,pemb.shape[1])[(pemb[0] != b).any(-1)]
                 # pemb = pemb[:, nzidx]
-                _get_or_set_crop(masked_img, w, 'set', set_val=0.)
+                self._get_or_set_crop(masked_img, w, loc_idx, 'set', set_val=0.)
             patch_embs.append(pemb)
-        pemb = _get_patch_emb(masked_img, self.convs[-1], self.rec_flds[-1])
+        pemb = self._get_patch_emb(masked_img, self.convs[-1], self.rec_flds[-1], axs[-1])
         patch_embs.append(pemb)
-        patch_embs = torch.cat(patch_embs, 1)
+        if not self.params.place_crop_features_in_grid:
+            patch_embs = torch.cat(patch_embs, 1)
+        else:
+            patch_embs = self._place_crop_features_in_grid(patch_embs, loc_idx)
         # fig, axs = plt.subplots(1,len(crops)+2,figsize=(25, 5))
         # axs[0].scatter([loc_idx[1]], [loc_idx[0]])
         # axs[0].imshow(rearrange(img[0], 'c h w -> h w c').cpu().detach().numpy())
         # for c, ax in zip(crops, axs[1:]):
         #     ax.imshow(rearrange(c[0], 'c h w -> h w c').cpu().detach().numpy())
         # axs[-1].imshow(rearrange(masked_img[0], 'c h w -> h w c').cpu().detach().numpy())
-        # plt.savefig('input.png')
+        if self.visualize:
+            plt.savefig('input.png')
         return patch_embs
+
+    def compute_loss(self, x, y, return_logits=True):
+        out = self.forward(x)
+        logits = out
+        loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
