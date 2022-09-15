@@ -27,6 +27,9 @@ attacks =  {
             'APGD': eval.get_apgd_atk, 
             'APGD_EOT20': eval.get_eot20_apgd_atk,
             'APGD_EOT50': eval.get_eot50_apgd_atk,
+            'APGDL2': eval.get_apgd_l2_atk, 
+            'APGDL2_EOT20': eval.get_eot20_apgd_l2_atk,
+            'APGDL2_EOT50': eval.get_eot50_apgd_l2_atk,
             'APGD_Transfer_MM8L':eval.get_transfered_atk(
             '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
             'Cifar10AutoAugmentMLPMixer8LTask-50K/4/'
@@ -45,12 +48,16 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--task', type=str, required=True)
     parser.add_argument('--ckp', type=str)
+    parser.add_argument('--num_test', type=int, default=2000)
+    parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--eval_only', action='store_true')
     parser.add_argument('--prune_and_test', action='store_true')
     parser.add_argument('--run_adv_attack_battery', action='store_true')
     parser.add_argument('--attacks', nargs='+', type=str, choices=attacks.keys(), default=['APGD'])
     parser.add_argument('--eps_list', nargs='+', type=float, default=[0., 0.008, 0.016, 0.024])
     parser.add_argument('--run_randomized_smoothing_eval', action='store_true')
+    parser.add_argument('--output_to_task_logdir', action='store_true')
+    parser.add_argument('--center_fixation', action='store_true')
     args = parser.parse_args()
 
     print(args)
@@ -63,12 +70,16 @@ if __name__ == '__main__':
     task_cls = get_task_class_from_str(args.task)
     task: AbstractTask = task_cls()
     exp_params = task.get_experiment_params()
+    runner_kwargs={}
     if args.run_adv_attack_battery:
-        task = eval.get_adversarial_battery_task(task_cls, 2000, 256, 
+        task = eval.get_adversarial_battery_task(task_cls, args.num_test, args.batch_size, 
                                                    {k:v for k,v in attacks.items() if k in args.attacks},
-                                                    args.eps_list
+                                                    args.eps_list, center_fixation=args.center_fixation
                                                     )()
         runner_cls = AdversarialAttackBatteryRunner
+        runner_kwargs = {
+            'output_to_ckp_dir': (not args.output_to_task_logdir)
+        }
     elif args.run_randomized_smoothing_eval:
         task = eval.get_randomized_smoothing_task(task_cls, 512, [0.125], 128, rs_batch_size=1024*10)()
         runner_cls = RandomizedSmoothingRunner
@@ -82,7 +93,7 @@ if __name__ == '__main__':
     else:
         ckp_pths = [None]
     for ckp_pth in ckp_pths:
-        runner = runner_cls(task, ckp_pth=ckp_pth, load_model_from_ckp=(ckp_pth is not None))
+        runner = runner_cls(task, ckp_pth=ckp_pth, load_model_from_ckp=(ckp_pth is not None), **runner_kwargs)
         if args.eval_only:
             runner.create_trainer()
             runner.test()
