@@ -285,6 +285,51 @@ class IdentityLayer(AbstractModel):
         else:
             return loss    
 
+class ActivationLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        activation_cls: Type[nn.Module] = None
+    
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+        self.activation = self.params.activation_cls()
+
+    def forward(self, x):
+        return self.activation(x)
+
+    def compute_loss(self, x, y, return_logits=True):
+        logits = x
+        loss = torch.zeros((x.shape[0],), device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+class BatchNorm2DLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        num_features: int = None
+        eps: float = 1e-05
+        momentum: float = 0.1
+        affine: bool = True
+        track_running_stats: bool = True
+    
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+        self.bn = nn.BatchNorm2d(params.num_features, params.eps, params.momentum, params.affine, params.track_running_stats)
+    
+    def forward(self, x):
+        return self.bn(x)
+
+    def compute_loss(self, x, y, return_logits=True):
+        logits = x
+        loss = torch.zeros((x.shape[0],), device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+
 class ConsistentActivationLayer(AbstractModel, CommonModelMixin, ConsistencyOptimizationMixin):
     @define(slots=False)
     class ModelParams(BaseParameters):
