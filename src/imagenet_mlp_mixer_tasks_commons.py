@@ -37,29 +37,12 @@ from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
 from mllib.adversarial.attacks import TorchAttackAPGDInfParams
 
-from mlp_mixer_tasks import get_resize_crop_flip_autoaugment_transforms
+from task_utils import *
 
-_LOGDIR = '/share/workhorse3/mshah1/biologically_inspired_models/logs/'
 _EPS_LIST = [0.0, 0.008, 0.016, 0.024, 0.032, 0.048, 0.064]
 _NEPOCHS = 300
 _PATIENCE = 100
 _APGD_STEPS = 50
-
-def get_imagenet10_params(num_train=13_000, num_test=500, train_transforms=None, test_transforms=None):
-    return get_dataset_params('/home/mshah1/workhorse3/imagenet-100/bin/64', SupportedDatasets.IMAGENET10, 
-                                num_train, num_test, train_transforms, test_transforms)
-
-def get_imagenet100_params(num_train=25, num_test=1, train_transforms=None, test_transforms=None):
-    return get_dataset_params('/home/mshah1/workhorse3/imagenet-100/bin/64', SupportedDatasets.IMAGENET100, 
-                                num_train, num_test, train_transforms, test_transforms)
-
-def get_imagenet100_64_params(num_train=127500, num_test=1000, train_transforms=None, test_transforms=None):
-    return get_dataset_params('/home/mshah1/workhorse3/imagenet-100/bin/64', SupportedDatasets.IMAGENET100_64, 
-                                num_train, num_test, train_transforms, test_transforms)
-
-def get_imagenet75_64_params(num_train=127500, num_test=1000, train_transforms=None, test_transforms=None):
-    return get_dataset_params('/home/mshah1/workhorse3/imagenet-75/bin/64', SupportedDatasets.IMAGENET75_64, 
-                                num_train, num_test, train_transforms, test_transforms)
 
 def get_conv_patch_extractor_params(input_size, hidden_size, patch_size):
     patch_params: ConvEncoder.ModelParams = ConvEncoder.get_params()
@@ -176,7 +159,7 @@ def get_adv_experiment_params(trainer_cls: Type[AdversarialTrainer], training_pa
         optimizer_config=optimizer_config,
         scheduler_config=scheduler_config,
         batch_size=batch_size,
-        logdir=_LOGDIR,
+        logdir=LOGDIR,
         exp_name=exp_name,
         num_trainings=num_training
     )
@@ -187,7 +170,7 @@ def get_apgd_inf_params(eps_list, nsteps, eot_iters=1):
 
 def get_common_training_params():
     return TrainingParams(
-        logdir=_LOGDIR, nepochs=_NEPOCHS, early_stop_patience=_PATIENCE, tracked_metric='val_accuracy', tracking_mode='max'
+        logdir=LOGDIR, nepochs=_NEPOCHS, early_stop_patience=_PATIENCE, tracked_metric='val_accuracy', tracking_mode='max'
     )
 
 def get_apgd_testing_adversarial_params():

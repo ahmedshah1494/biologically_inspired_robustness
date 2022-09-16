@@ -7,8 +7,9 @@ from adversarialML.biologically_inspired_models.src.mlp_mixer_models import (
     FirstNExtractionClassifier, LinearLayer, MixerBlock, MixerMLP, MLPMixer,
     NormalizationLayer, UnfoldPatchExtractor)
 from adversarialML.biologically_inspired_models.src.models import (
-    ConsistentActivationLayer, ConvEncoder, GeneralClassifier, IdentityLayer,
-    ScanningConsistentActivationLayer, SequentialLayers, XResNet34, XResNet18, SupervisedContrastiveTrainingWrapper)
+    CommonModelParams, ConsistentActivationLayer, ConvEncoder, GeneralClassifier, IdentityLayer,
+    ScanningConsistentActivationLayer, SequentialLayers, XResNet34, XResNet18, SupervisedContrastiveTrainingWrapper,
+    ActivationLayer, BatchNorm2DLayer)
 from adversarialML.biologically_inspired_models.src.retina_preproc import (
     AbstractRetinaFilter, RetinaBlurFilter, RetinaNonUniformPatchEmbedding,
     RetinaSampleFilter)
@@ -16,136 +17,21 @@ from adversarialML.biologically_inspired_models.src.supconloss import \
     TwoCropTransform
 from adversarialML.biologically_inspired_models.src.trainers import (
     ActivityOptimizationSchedule, AdversarialParams, AdversarialTrainer,
-    ConsistentActivationModelAdversarialTrainer,
+    ConsistentActivationModelAdversarialTrainer, PytorchLightningAdversarialTrainer, LightningLiteParams,
     MixedPrecisionAdversarialTrainer)
 from mllib.adversarial.attacks import (AttackParamFactory, SupportedAttacks,
                                        SupportedBackend)
-from mllib.datasets.dataset_factory import (ImageDatasetFactory,
-                                            SupportedDatasets)
+
 from mllib.models.base_models import MLP
 from mllib.optimizers.configs import (AdamOptimizerConfig,
                                       CosineAnnealingWarmRestartsConfig,
                                       CyclicLRConfig, LinearLRConfig,
                                       ReduceLROnPlateauConfig,
-                                      SequentialLRConfig, SGDOptimizerConfig)
-from mllib.runners.configs import BaseExperimentConfig
+                                      SequentialLRConfig, OneCycleLRConfig, SGDOptimizerConfig)
+from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
-
-
-def get_cifar10_params(num_train=25000, num_test=1000):
-    p = ImageDatasetFactory.get_params()
-    p.dataset = SupportedDatasets.CIFAR10
-    p.datafolder = '/home/mshah1/workhorse3/'
-    p.max_num_train = num_train
-    p.max_num_test = num_test
-    return p
-
-def get_tiny_imagenet_params(num_train=100_000, num_test=10_000):
-    p = ImageDatasetFactory.get_params()
-    p.dataset = SupportedDatasets.TINY_IMAGENET
-    p.datafolder = '/home/mshah1/workhorse3/tiny-imagenet-200/bin/'
-    p.max_num_train = num_train
-    p.max_num_test = num_test
-    return p
-
-def get_random_crop_flip_transforms(size, padding):
-    return [
-        torchvision.transforms.RandomCrop(size, padding=padding, padding_mode='reflect'),
-        torchvision.transforms.RandomHorizontalFlip()
-    ]
-
-def get_resize_crop_flip_transforms(size, padding):
-    return [
-        torchvision.transforms.Resize(size),
-        *(get_random_crop_flip_transforms(size, padding))
-    ]
-
-def get_resize_crop_flip_autoaugment_transforms(size, padding, profile):
-    return [
-        *(get_resize_crop_flip_transforms(size, padding)),
-        torchvision.transforms.AutoAugment(profile)
-    ]
-
-def get_dataset_params(datafolder, dataset, num_train=13_000, num_test=500, train_transforms=None, test_transforms=None):
-    p = ImageDatasetFactory.get_params()
-    p.dataset = dataset
-    p.datafolder = datafolder
-    p.max_num_train = num_train
-    p.max_num_test = num_test
-    if train_transforms is not None:
-        train_transforms.append(torchvision.transforms.ToTensor())
-    else:
-        train_transforms = [torchvision.transforms.ToTensor()]
-    if test_transforms is not None:
-        test_transforms.append(torchvision.transforms.ToTensor())
-    else:
-        test_transforms = [torchvision.transforms.ToTensor()]
-    p.custom_transforms = (
-        torchvision.transforms.Compose(train_transforms) if len(train_transforms) > 1 else train_transforms[0],
-        torchvision.transforms.Compose(test_transforms) if len(test_transforms) > 1 else test_transforms[0]
-    )
-    return p
-
-def get_imagenet10_params(num_train=13_000, num_test=500, train_transforms=[], test_transforms=[]):
-    p = ImageDatasetFactory.get_params()
-    p.dataset = SupportedDatasets.IMAGENET10
-    p.datafolder = '/home/mshah1/workhorse3/imagenet-10/bin/'
-    p.max_num_train = num_train
-    p.max_num_test = num_test
-    train_transforms.append(torchvision.transforms.ToTensor())
-    test_transforms.append(torchvision.transforms.ToTensor())
-    p.custom_transforms = (
-        torchvision.transforms.Compose(train_transforms) if len(train_transforms) > 1 else train_transforms[0],
-        torchvision.transforms.Compose(test_transforms) if len(test_transforms) > 1 else test_transforms[0]
-    )
-    return p
-
-def get_imagenet100_params(num_train=25, num_test=1, train_transforms=[], test_transforms=[]):
-    p = ImageDatasetFactory.get_params()
-    p.dataset = SupportedDatasets.IMAGENET100
-    p.datafolder = '/home/mshah1/workhorse3/imagenet-100/shards/'
-    p.max_num_train = num_train
-    p.max_num_test = num_test
-    train_transforms.append(torchvision.transforms.ToTensor())
-    test_transforms.append(torchvision.transforms.ToTensor())
-    p.custom_transforms = (
-        torchvision.transforms.Compose(train_transforms) if len(train_transforms) > 1 else train_transforms[0],
-        torchvision.transforms.Compose(test_transforms) if len(test_transforms) > 1 else test_transforms[0]
-    )
-    return p
-
-def get_imagenet100_64_params(num_train=127500, num_test=5000, train_transforms=[], test_transforms=[]):
-    return get_dataset_params('/home/mshah1/workhorse3/imagenet-100/bin/64', SupportedDatasets.IMAGENET100_64, 
-                                num_train, num_test, train_transforms, test_transforms)
-
-def get_imagenet_params(num_train=float('inf'), num_test=float('inf')):
-    p = ImageDatasetFactory.get_params()
-    p.dataset = SupportedDatasets.IMAGENET
-    p.datafolder = '/home/mshah1/workhorse3/imagenet/shards2/'
-    p.max_num_train = num_train
-    p.max_num_test = num_test
-    return p
-
-def set_common_training_params(p: BaseExperimentConfig):
-    p.batch_size = 256
-    p.trainer_params.training_params.nepochs = 200
-    p.num_trainings = 10
-    p.logdir = '/share/workhorse3/mshah1/biologically_inspired_models/logs/'
-    p.trainer_params.training_params.early_stop_patience = 20
-    p.trainer_params.training_params.tracked_metric = 'val_loss'
-    p.trainer_params.training_params.tracking_mode = 'min'
-
-def set_adv_params(p: AdversarialParams, test_eps):
-    p.training_attack_params = None
-    def eps_to_attack(eps):
-        atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
-        atk_p.eps = eps
-        atk_p.nsteps = 50
-        atk_p.step_size = eps/40
-        atk_p.random_start = True
-        return atk_p
-    p.testing_attack_params = [eps_to_attack(eps) for eps in test_eps]
+from task_utils import *
 
 def add_retina_blur_to_mlp_mixer(cnn_params, input_size, cone_std=0.12, rod_std=0.06, max_rod_density=0.12, kernel_size=9, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
     rblur = RetinaBlurFilter.ModelParams(RetinaBlurFilter, input_size, cone_std=cone_std, rod_std=rod_std, max_rod_density=max_rod_density, kernel_size=9)
@@ -1129,7 +1015,8 @@ class ImagenetMLPMixerS8Task(Cifar10AutoAugmentMLPMixerTask):
         p = get_imagenet_params(num_train=126, num_test=5)
         p.custom_transforms = (
             torchvision.transforms.Compose([
-                torchvision.transforms.RandomResizedCrop(224),
+                torchvision.transforms.Resize(224),
+                torchvision.transforms.RandomCrop(224),
                 torchvision.transforms.RandomHorizontalFlip(),
                 torchvision.transforms.RandAugment(magnitude=15),
                 torchvision.transforms.ToTensor()
@@ -1151,9 +1038,6 @@ class ImagenetMLPMixerS8Task(Cifar10AutoAugmentMLPMixerTask):
 class ImagenetCyclicLRMLPMixerS8Task(SGDCyclicLRMixin, ImagenetMLPMixerS8Task):
     def get_experiment_params(self):
         p = super().get_experiment_params()
-        p.scheduler_config = CyclicLRConfig(base_lr=1e-6, max_lr=1e-3, step_size_up=10_000, step_size_down=750_000, cycle_momentum=False)
+        p.scheduler_config = CyclicLRConfig(base_lr=1e-5, max_lr=2e-3, step_size_up=10_000, step_size_down=798*300 - 10_000, cycle_momentum=False)
         p.trainer_params.training_params.scheduler_step_after_epoch = False
-        p.scheduler_config.mode = 'exp_range'
-        p.scheduler_config.gamma = 0.99999
-        p.optimizer_config.weight_decay = 0.01
         return p

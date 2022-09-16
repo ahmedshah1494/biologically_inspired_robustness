@@ -2,8 +2,12 @@ import json
 import pickle
 import numpy as np
 import os
+import socket
 
 import torch
+
+def gethostname():
+    return socket.gethostname()
 
 def aggregate_metrics(logdir, metrics_filename='metrics.json'):
     metric_dicts = []
@@ -82,7 +86,7 @@ def get_eps_from_logdict_key(s):
         eps = float(eps)
     return atkname, eps
 
-def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='adv_metrics.json',
+def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='metrics.json',
                 state_hist_filename='state_dict_hist.json', data_filename='data_and_preds.pkl',
                 adv_battery_data_filename='adv_data_and_preds.pkl', adv_metrics_filename='adv_metrics.json',
                 adv_succ_filename='adv_succ.json', args_filename='task.pkl', 
