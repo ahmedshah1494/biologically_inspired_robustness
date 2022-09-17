@@ -1,11 +1,17 @@
+from time import time
+from typing import Type
 from mllib.datasets.dataset_factory import (ImageDatasetFactory,
                                             SupportedDatasets)
 import torchvision
-from adversarialML.biologically_inspired_models.src.trainers import AdversarialParams
+from adversarialML.biologically_inspired_models.src.trainers import AdversarialParams, AdversarialTrainer
 from adversarialML.biologically_inspired_models.src.utils import gethostname
 from mllib.adversarial.attacks import (AttackParamFactory, SupportedAttacks,
                                        SupportedBackend)
 from mllib.runners.configs import BaseExperimentConfig
+
+from mllib.optimizers.configs import (AbstractOptimizerConfig, AbstractSchedulerConfig, CyclicLRConfig)
+from mllib.runners.configs import BaseExperimentConfig, TrainingParams
+from mllib.adversarial.attacks import TorchAttackAPGDInfParams
 
 hostname = gethostname()
 if 'bridges2' in hostname:
@@ -69,14 +75,6 @@ def get_dataset_params(datafolder, dataset, num_train=13_000, num_test=500, trai
     )
     return p
 
-def get_imagenet_params(num_train=float('inf'), num_test=float('inf')):
-    p = ImageDatasetFactory.get_params()
-    p.dataset = SupportedDatasets.IMAGENET
-    p.datafolder = f'{logdir_root}/imagenet/shards2/'
-    p.max_num_train = num_train
-    p.max_num_test = num_test
-    return p
-
 def set_common_training_params(p: BaseExperimentConfig):
     p.batch_size = 256
     p.trainer_params.training_params.nepochs = 200
@@ -116,3 +114,34 @@ def get_imagenet75_64_params(num_train=127500, num_test=1000, train_transforms=N
 def get_imagenet100_81_params(num_train=127500, num_test=5000, train_transforms=None, test_transforms=None):
     return get_dataset_params(f'{logdir_root}/imagenet-100/bin/81', SupportedDatasets.IMAGENET100_81, 
                                 num_train, num_test, train_transforms, test_transforms)
+
+def get_imagenet_params(num_train=127, num_test=5, train_transforms=None, test_transforms=None):
+    return get_dataset_params(f'{logdir_root}/imagenet/shards2/', SupportedDatasets.IMAGENET, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_imagenet_folder_params(num_train=1_271_000, num_test=50_000, train_transforms=None, test_transforms=None):
+    return get_dataset_params(f'{logdir_root}/imagenet/', SupportedDatasets.IMAGENET_FOLDER, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_adv_experiment_params(trainer_cls: Type[AdversarialTrainer], training_params: TrainingParams, adv_params:AdversarialParams,
+                                optimizer_config:AbstractOptimizerConfig, scheduler_config: AbstractSchedulerConfig, batch_size: int,
+                                exp_name: str = '', num_training=5):
+    if isinstance(scheduler_config, CyclicLRConfig):
+        training_params.scheduler_step_after_epoch = False
+    p = BaseExperimentConfig(
+        trainer_params=trainer_cls.TrainerParams(
+            trainer_cls,
+            training_params=training_params,
+            adversarial_params=adv_params
+        ),
+        optimizer_config=optimizer_config,
+        scheduler_config=scheduler_config,
+        batch_size=batch_size,
+        logdir=LOGDIR,
+        exp_name=exp_name,
+        num_trainings=num_training
+    )
+    return p
+
+def get_apgd_inf_params(eps_list, nsteps, eot_iters=1):
+    return [TorchAttackAPGDInfParams(eps=eps, nsteps=nsteps, eot_iter=eot_iters, seed=time()) for eps in eps_list]

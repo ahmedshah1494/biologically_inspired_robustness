@@ -145,29 +145,6 @@ def get_retina_nonuniform_patch_mlp_mixer_params(input_size, nclasses, hidden_si
     mlp_mixer_params = get_mlp_mixer_params(input_size, patch_params, cls_params, [mixer_block_params]*num_blocks, normalization_layer_params, normalize_input)
     return mlp_mixer_params
 
-def get_adv_experiment_params(trainer_cls: Type[AdversarialTrainer], training_params: TrainingParams, adv_params:AdversarialParams,
-                                optimizer_config:AbstractOptimizerConfig, scheduler_config: AbstractSchedulerConfig, batch_size: int,
-                                exp_name: str = '', num_training=5):
-    if isinstance(scheduler_config, CyclicLRConfig):
-        training_params.scheduler_step_after_epoch = False
-    p = BaseExperimentConfig(
-        trainer_params=trainer_cls.TrainerParams(
-            trainer_cls,
-            training_params=training_params,
-            adversarial_params=adv_params
-        ),
-        optimizer_config=optimizer_config,
-        scheduler_config=scheduler_config,
-        batch_size=batch_size,
-        logdir=LOGDIR,
-        exp_name=exp_name,
-        num_trainings=num_training
-    )
-    return p
-
-def get_apgd_inf_params(eps_list, nsteps, eot_iters=1):
-    return [TorchAttackAPGDInfParams(eps=eps, nsteps=nsteps, eot_iter=eot_iters, seed=time()) for eps in eps_list]
-
 def get_common_training_params():
     return TrainingParams(
         logdir=LOGDIR, nepochs=_NEPOCHS, early_stop_patience=_PATIENCE, tracked_metric='val_accuracy', tracking_mode='max'
