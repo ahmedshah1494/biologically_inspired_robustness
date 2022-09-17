@@ -12,9 +12,11 @@ import torchvision
 
 from adversarialML.biologically_inspired_models.src.model_utils import _make_first_dim_last, _make_last_dim_first, merge_strings, mm, str_to_act_and_dact_fn, _compute_conv_output_shape
 from adversarialML.biologically_inspired_models.src.supconloss import SupConLoss, AngularSupConLoss
-from fastai.vision.models.xresnet import xresnet34, xresnet18
+from fastai.vision.models.xresnet import xresnet34, xresnet18, xresnet50
 from einops import rearrange
 from fastai.layers import ResBlock
+
+from adversarialML.biologically_inspired_models.src.wide_resnet import Wide_ResNet
 @define(slots=False)
 class CommonModelParams:
     input_size: Union[int, List[int]] = None
@@ -884,6 +886,7 @@ class ConcurrentConsistencyOptimizationSequentialLayers(SequentialLayers):
 class GeneralClassifier(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
+        input_size: List[int] = None
         feature_model_params: BaseParameters = None
         classifier_params: BaseParameters = None
     
@@ -898,8 +901,8 @@ class GeneralClassifier(AbstractModel):
     def _make_network(self):
         fe_params = self.params.feature_model_params
         self.feature_model = fe_params.cls(fe_params)
-
-        x = torch.rand(1,*(fe_params.common_params.input_size))
+        input_size = self.params.input_size if self.params.input_size is not None else fe_params.common_params.input_size
+        x = torch.rand(1,*(input_size))
         x = self.feature_model(x)
         if isinstance(x, tuple):
             x = x[0]
@@ -1194,7 +1197,7 @@ class XResNet34(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
         common_params: CommonModelParams = field(factory=CommonModelParams)
-        normalize_input: bool = True
+        normalization_layer_params: BaseParameters = None
         setup_feature_extraction: bool = False
         setup_classification: bool = True
         num_classes: int = None
@@ -1204,20 +1207,27 @@ class XResNet34(AbstractModel):
         self.params: XResNet34.ModelParams = params
         self._make_network()
 
+    def _make_resnet(self):
+        resnet = xresnet34(p=self.params.common_params.dropout_p,
+                                c_in=self.params.common_params.input_size[0],
+                                n_out=self.params.common_params.num_units,
+                                act_cls=self.params.common_params.activation,
+                            )
+        resnet[-1] = nn.Identity()
+        return resnet
+
     def _make_network(self):
-        self.resnet = xresnet34(p=self.params.common_params.dropout_p,
-                                    c_in=self.params.common_params.input_size[0],
-                                    n_out=self.params.common_params.num_units,
-                                    act_cls=self.params.common_params.activation,
-                                )
-        self.resnet[-1] = nn.Identity()
+        if self.params.normalization_layer_params is not None:
+            self.normalization_layer = self.params.normalization_layer_params.cls(self.params.normalization_layer_params)
+        else:
+            self.normalization_layer = nn.Identity()
+        self.resnet = self._make_resnet()
         if self.params.setup_classification:
             x = self.resnet(torch.rand(1, *(self.params.common_params.input_size)))
             self.classifier = nn.Linear(x.shape[1], self.params.num_classes)
 
     def _get_feats(self, x, **kwargs):
-        if self.params.normalize_input:
-            x = (x - 0.5)/0.5
+        x = self.normalization_layer(x)
         feat = self.resnet(x)
         return feat
     
@@ -1239,13 +1249,32 @@ class XResNet34(AbstractModel):
         return output
 
 class XResNet18(XResNet34):
-    def _make_network(self):
-        self.resnet = xresnet18(p=self.params.common_params.dropout_p,
+    def _make_resnet(self):
+        resnet = xresnet18(p=self.params.common_params.dropout_p,
                                     c_in=self.params.common_params.input_size[0],
                                     n_out=self.params.common_params.num_units,
                                     act_cls=self.params.common_params.activation,
                                 )
-        self.resnet[-1] = nn.Identity()
-        if self.params.setup_classification:
-            x = self.resnet(torch.rand(1, *(self.params.common_params.input_size)))
-            self.classifier = nn.Linear(x.shape[1], self.params.num_classes)
+        resnet[-1] = nn.Identity()
+        return resnet
+
+class XResNet50(XResNet34):
+    def _make_resnet(self):
+        resnet = xresnet50(p=self.params.common_params.dropout_p,
+                                    c_in=self.params.common_params.input_size[0],
+                                    n_out=self.params.common_params.num_units,
+                                    act_cls=self.params.common_params.activation,
+                                )
+        resnet[-1] = nn.Identity()
+        return resnet
+
+class WideResnet(XResNet34):
+    @define(slots=False)
+    class ModelParams(XResNet34.ModelParams):
+        depth: int = None
+        widen_factor: int = None
+    
+    def _make_resnet(self):
+        resnet = Wide_ResNet(self.params.depth, self.params.widen_factor, self.params.common_params.dropout_p, self.params.num_classes)
+        resnet.linear = nn.Identity()
+        return resnet
