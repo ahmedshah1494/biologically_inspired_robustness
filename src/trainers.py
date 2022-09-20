@@ -1,10 +1,13 @@
+from copy import deepcopy
 from enum import Enum, auto
 import os
 import shutil
 from typing import List, Literal, Type, Union, Tuple
 from attrs import define, field
 from mllib.trainers.base_trainers import Trainer as _Trainer
+from mllib.trainers.base_trainers import PytorchLightningTrainer
 from mllib.trainers.base_trainers import MixedPrecisionTrainerMixin
+from mllib.trainers.pl_trainer import PytorchLightningLiteTrainerMixin, LightningLiteParams
 from mllib.runners.configs import TrainingParams
 from mllib.utils.metric_utils import compute_accuracy, get_preds_from_logits
 from mllib.param import BaseParameters
@@ -14,11 +17,15 @@ import numpy as np
 import torchattacks
 from einops import rearrange
 
+import pytorch_lightning as pl
+
 from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper, FoolboxCWL2AttackWrapper
 from mllib.adversarial.randomized_smoothing.core import Smooth
 from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin
 from adversarialML.biologically_inspired_models.src.pruning import PruningMixin
 from adversarialML.biologically_inspired_models.src.utils import aggregate_dicts, merge_iterables_in_dict, write_json, write_pickle, load_json, recursive_dict_update, load_pickle
+
+import torchmetrics
 
 @define(slots=False)
 class AdversarialParams:
@@ -120,6 +127,10 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'logits':test_logits}, metrics
     
     def test_epoch_end(self, outputs, metrics):
+        outputs = self._maybe_gather_all(outputs)
+        outputs = [{k: v.cpu().detach().numpy() if isinstance(v, torch.Tensor) else v for k,v in o.items()} for o in outputs]
+        metrics = self._maybe_gather_all(metrics)
+        metrics = {k: v.cpu().detach().numpy().tolist() if isinstance(v, torch.Tensor) else v for k,v in metrics.items()}
         outputs = aggregate_dicts(outputs)
         test_eps = [(p.eps if p is not None else 0.) for p in self.params.adversarial_params.testing_attack_params]
         new_outputs = aggregate_dicts(outputs)
@@ -130,6 +141,18 @@ class AdversarialTrainer(_Trainer, PruningMixin):
             acc = (np.array(new_outputs['preds'][eps]) == np.array(new_outputs['labels'])).astype(float).mean()
             test_acc[eps] = acc
         new_outputs['test_acc'] = test_acc
+
+        print('test metrics:')
+        print(metrics)
+        _, train_metrics = self._batch_loop(self.val_step, self.train_loader, 0, logging=False)
+        train_metrics = self._maybe_gather_all(train_metrics)
+        train_metrics = {k: v.cpu().detach().numpy().tolist() if isinstance(v, torch.Tensor) else v for k,v in train_metrics.items()}
+        print(train_metrics)
+        for k in train_metrics:
+            train_metrics[k.replace('val', 'train')] = train_metrics.pop(k)
+        if self.is_rank_zero:
+            train_metrics = aggregate_dicts(train_metrics)
+            self.save_logs_after_test(train_metrics, outputs)
         return new_outputs, metrics
     
     def train(self):
@@ -169,21 +192,21 @@ class AdversarialTrainer(_Trainer, PruningMixin):
         self.save_source_dir()
 
     def test(self):
+        self.testing_adv_attacks = self._maybe_get_attacks(self.params.adversarial_params.testing_attack_params)
         test_outputs, test_metrics = self.test_loop(post_loop_fn=self.test_epoch_end)
-        print('test metrics:')
-        print(test_metrics)
-        _, train_metrics = self._batch_loop(self.val_step, self.train_loader, 0, logging=False)
-        for k in train_metrics:
-            train_metrics[k.replace('val', 'train')] = train_metrics.pop(k)
-        train_metrics = aggregate_dicts(train_metrics)
-        self.save_logs_after_test(train_metrics, test_outputs)
         
     def _log(self, logs, step):
-        for k,v in logs.items():
-            if isinstance(v, dict):
-                self.logger.add_scalars(k, v, global_step=step)
-            elif not iterable(v):
-                self.logger.add_scalar(k, v, global_step=step)
+        if self.is_rank_zero:
+            for k,v in logs.items():
+                if isinstance(v, dict):
+                    self.logger.add_scalars(k, v, global_step=step)
+                elif not iterable(v):
+                    self.logger.add_scalar(k, v, global_step=step)
+
+class PytorchLightningAdversarialTrainer(PytorchLightningLiteTrainerMixin, AdversarialTrainer):
+    @define(slots=False)
+    class TrainerParams(AdversarialTrainer.TrainerParams):
+        lightning_lite_params: Type[LightningLiteParams] = field(factory=LightningLiteParams)
 
 class MixedPrecisionAdversarialTrainer(MixedPrecisionTrainerMixin, AdversarialTrainer):
     pass
@@ -310,6 +333,10 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         new_outputs['test_acc'] = test_acc
         new_outputs['adv_succ'] = adv_succ
         write_json(adv_succ, os.path.join(self.logdir, 'adv_succ.json'))
+
+        print('test metrics:')
+        print(metrics)
+        self.save_logs_after_test({'train_accuracy': 0.}, outputs)
         return new_outputs, metrics
 
     def test_step(self, batch, batch_idx):
@@ -457,3 +484,137 @@ class RandomizedSmoothingEvaluationTrainer(_Trainer):
             train_metrics[k.replace('val', 'train')] = train_metrics.pop(k)
         train_metrics = aggregate_dicts(train_metrics)
         self.save_logs_after_test(train_metrics, test_outputs)
+
+
+class LightningAdversarialTrainer(PytorchLightningTrainer, PruningMixin):
+    @define(slots=False)    
+    class TrainerParams(BaseParameters):
+        training_params: Type[TrainingParams] = field(factory=TrainingParams)
+        adversarial_params: Type[AdversarialParams] = field(factory=AdversarialParams)
+
+    @classmethod
+    def get_params(cls):
+        return cls.TrainerParams(cls)
+
+    def __init__(self, params: TrainerParams, *args, **kwargs):
+        super().__init__(params, *args, **kwargs)
+        print(self.model)
+        self.params = params
+        self.training_adv_attack = self._maybe_get_attacks(params.adversarial_params.training_attack_params)
+        if isinstance(self.training_adv_attack, tuple):
+            self.training_adv_attack = self.training_adv_attack[1]
+        self.testing_adv_attacks = self._maybe_get_attacks(params.adversarial_params.testing_attack_params)
+        self.test_accuracy_trackers = torch.nn.ModuleList([torchmetrics.Accuracy() for a in self.testing_adv_attacks])
+        self.data_and_pred_filename = 'data_and_preds.pkl'
+        self.metrics_filename = 'metrics.json'
+        
+    def _get_attack_from_params(self, p: Union[AbstractAttackConfig, Tuple[str, AbstractAttackConfig]]):
+        if isinstance(p, tuple):
+            name, p = p
+        else:
+            name = None
+        if p is not None:
+            if p.model is None:
+                p.model = self.model.eval()
+            return name, p._cls(p.model, **(p.asdict()))
+        else:
+            return name, None
+
+    def _maybe_get_attacks(self, attack_params: Union[AbstractAttackConfig, List[AbstractAttackConfig]]):
+        if attack_params is None:
+            attack = ('',None)
+        else:
+            if iterable(attack_params):
+                attack = [self._get_attack_from_params(p) for p in attack_params]
+            else:
+                attack = self._get_attack_from_params(attack_params)
+        return attack
+    
+    def _maybe_attack_batch(self, batch, adv_attack):
+        x,y = batch
+        if adv_attack is not None:
+            if x.dim() == 5:
+                y_ = torch.repeat_interleave(y, x.shape[1])
+                x = rearrange(x, 'b n c h w -> (b n) c h w')
+                x = adv_attack(x, y_)
+                x = rearrange(x, '(b n) c h w -> b n c h w', b = len(y))
+            else:
+                x = adv_attack(x, y)
+        return x,y
+
+    def forward_step(self, batch, batch_idx):
+        batch = self._maybe_attack_batch(batch, self.training_adv_attack)
+        return super().forward_step(batch, batch_idx)
+
+    def test_step(self, batch, batch_idx):
+        test_eps = [(p.eps if p is not None else 0.) for p in self.params.adversarial_params.testing_attack_params]
+        test_pred = {}
+        adv_x = {}
+        test_loss = {}
+        test_acc = {}
+        test_logits = {}
+        for (name, atk), A in zip(self.testing_adv_attacks, self.test_accuracy_trackers):
+            if isinstance(atk, FoolboxAttackWrapper):
+                eps = atk.run_kwargs.get('epsilons', [float('inf')])[0]
+            elif isinstance(atk, torchattacks.attack.Attack):
+                eps = atk.eps
+            elif atk is None:
+                eps = 0.
+            else:
+                raise NotImplementedError(f'{type(atk)} is not supported')
+            x,y = self._maybe_attack_batch(batch, atk)
+
+            logits, loss = self._get_outputs_and_loss(x, y)
+            logits = logits.detach()            
+            y = y.detach()
+            preds = get_preds_from_logits(logits)
+            A(preds, y)
+
+            loss = loss.mean().detach()
+
+            test_pred[eps] = preds
+            adv_x[eps] = x.detach()
+            test_loss[eps] = loss
+            test_acc[eps] = A.compute()
+            test_logits[eps] = logits
+        metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
+        return {'logs': metrics}
+
+    def test_epoch_end(self, outputs):
+        super().test_epoch_end(outputs)
+        outputs = aggregate_dicts(outputs)
+        outputs = merge_iterables_in_dict(outputs)
+        outputs['test_acc'] = outputs.pop('logs')
+        outputs['test_acc'] = {k: float(v.mean().cpu()) for k,v in outputs['test_acc'].items()}
+        print('test metrics:')
+        print(outputs)
+        if self.global_rank == 0:
+            train_metrics = {'train_accuracy': 0.}
+            self.save_logs_after_test(train_metrics, outputs)
+        return outputs
+    
+    def save_training_logs(self, train_acc, test_accs):
+        metrics = {
+            'train_acc':train_acc,
+            'test_accs':test_accs,
+        }
+        write_json(metrics, os.path.join(self.logdir, self.metrics_filename))
+
+    def save_data_and_preds(self, preds, labels, inputs, logits):
+        d = {}
+        for k in preds.keys():
+            d[k] = {
+                'X': inputs[k],
+                'Y': labels,
+                'Y_pred': preds[k],
+                'logits': logits[k]
+            }
+        write_pickle(d, os.path.join(self.logdir, self.data_and_pred_filename))
+    
+    def save_source_dir(self):
+        if not os.path.exists(os.path.join(self.logdir, 'source')):
+            shutil.copytree(os.path.dirname(__file__), os.path.join(self.logdir, 'source'))
+    
+    def save_logs_after_test(self, train_metrics, test_outputs):
+        self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
+        self.save_source_dir()
