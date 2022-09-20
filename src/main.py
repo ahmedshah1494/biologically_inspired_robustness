@@ -30,11 +30,11 @@ attacks =  {
             'APGDL2': eval.get_apgd_l2_atk, 
             'APGDL2_EOT20': eval.get_eot20_apgd_l2_atk,
             'APGDL2_EOT50': eval.get_eot50_apgd_l2_atk,
-            'APGD_Transfer_MM8L':eval.get_transfered_atk(
-            '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
-            'Cifar10AutoAugmentMLPMixer8LTask-50K/4/'
-            'checkpoints/model_checkpoint.pt', eval.get_apgd_atk
-            ),
+            # 'APGD_Transfer_MM8L':eval.get_transfered_atk(
+            # '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
+            # 'Cifar10AutoAugmentMLPMixer8LTask-50K/4/'
+            # 'checkpoints/model_checkpoint.pt', eval.get_apgd_atk
+            # ),
             # 'APGD_Transfer_SC_LP_MM8L':eval.get_transfered_atk(
             # '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
             # 'Cifar10AutoAugmentSupConLinearProjMLPMixer8LTask-50K/0/'
@@ -58,6 +58,10 @@ if __name__ == '__main__':
     parser.add_argument('--run_randomized_smoothing_eval', action='store_true')
     parser.add_argument('--output_to_task_logdir', action='store_true')
     parser.add_argument('--center_fixation', action='store_true')
+    parser.add_argument('--use_lightning_lite', action='store_true')
+    parser.add_argument('--use_bf16_precision', action='store_true')
+    parser.add_argument('--use_f16_precision', action='store_true')
+    parser.add_argument('--debug', action='store_true')
     args = parser.parse_args()
 
     print(args)
@@ -85,6 +89,30 @@ if __name__ == '__main__':
         runner_cls = RandomizedSmoothingRunner
     else:
         runner_cls = AdversarialExperimentRunner
+        if args.use_lightning_lite:
+            runner_kwargs = {
+                'wrap_trainer_with_lightning': True,
+                'lightning_kwargs': {
+                    'strategy': "ddp",
+                    'devices': 'auto',
+                    'accelerator': "gpu",
+                    'precision': "bf16"
+                }
+            }
+        else:
+            if args.use_f16_precision:
+                precision = 16
+            elif args.use_bf16_precision:
+                precision = 'bf16'
+            else:
+                precision = 32
+            runner_kwargs = {
+                'lightning_kwargs': {
+                    'precision': precision,
+                    # 'profiler': 'simple',
+                    'fast_dev_run': args.debug
+                }
+            }
     if args.ckp is not None:
         if os.path.isdir(args.ckp):
             ckp_pths = get_model_checkpoint_paths(args.ckp)
