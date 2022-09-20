@@ -13,7 +13,15 @@ class AdversarialExperimentRunner(BaseRunner):
         model: torch.nn.Module = p.cls(p)
         if self.load_model_from_ckp:
             src_model = self.load_model()
-            src_sd = src_model.state_dict()
+            if isinstance(src_model, dict):
+                # This condition is used to load pytorch lightning checkpoints into
+                # non-PL trainers, usually for evaluation
+                src_sd = src_model['state_dict']
+                # state dicts in PL checkpoint contain keys of the form "model.{...}",
+                # so we must remove "model." to match them with model keys.
+                src_sd = {k.replace('model.','', 1): v for k,v in src_sd.items()}
+            else:
+                src_sd = src_model.state_dict()
             tgt_sd = model.state_dict()
             mismatch = model.load_state_dict(src_sd, strict=False)
             if len(mismatch.missing_keys) > 0:
@@ -21,21 +29,7 @@ class AdversarialExperimentRunner(BaseRunner):
                     print(f'keeping {k} from model')
             if len(mismatch.unexpected_keys) > 0:
                 print('got unexpected keys:', mismatch.unexpected_keys)
-            # for k in tgt_sd:
-            #     if k in src_sd:
-            #         tgt_sd[k] = src_sd[k]
-            #         print(f'loading {k} from source model')
-            #     else:
-            #         print(f'keeping {k} from model')
-            # src_param_dict = {n:p for n,p in src_model.named_parameters()}
-            # for n,p in model.named_parameters():
-            #     if (n in src_param_dict) and (src_param_dict[n].shape == p.shape):
-            #         print(f'loading {n} from source model')
-            #         p.data = src_param_dict[n].data
-            #     else:
-            #         print(f'keeping {n} from model')
         return model
-        # return self.load_model()
     
     def create_dataloaders(self):
         train_dataset, val_dataset, test_dataset = self.create_datasets()
@@ -49,9 +43,9 @@ class AdversarialExperimentRunner(BaseRunner):
             val_dataset = val_dataset.batched(p.batch_size, partial=False)
             test_dataset = test_dataset.batched(p.batch_size, partial=False)
 
-            train_loader = wds.WebLoader(train_dataset, batch_size=None, shuffle=False, num_workers=num_workers).with_length(len(train_dataset) // p.batch_size)
-            val_loader = wds.WebLoader(val_dataset, batch_size=None, shuffle=False, num_workers=num_workers).with_length(len(val_dataset) // p.batch_size)
-            test_loader = wds.WebLoader(test_dataset, batch_size=None, shuffle=False, num_workers=num_workers).with_length(len(test_dataset) // p.batch_size)
+            train_loader = wds.WebLoader(train_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(train_dataset) // p.batch_size)
+            val_loader = wds.WebLoader(val_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(val_dataset) // p.batch_size)
+            test_loader = wds.WebLoader(test_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(test_dataset) // p.batch_size)
         else:
             train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=p.batch_size, shuffle=True, num_workers=8, pin_memory=True)
             val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=p.batch_size, shuffle=False, num_workers=8, pin_memory=True)
@@ -61,7 +55,7 @@ class AdversarialExperimentRunner(BaseRunner):
         
     def get_experiment_dir(self, logdir, exp_name):
         def is_exp_complete(i):
-            return os.path.exists(os.path.join(logdir, str(i), 'task.pkl'))
+            return os.path.exists(os.path.join(logdir, str(i), 'metrics.json'))
         exp_params = self.task.get_experiment_params()
         exp_name = f'-{exp_name}' if len(exp_name) > 0 else exp_name
         task_name = type(self.task).__name__
@@ -78,6 +72,7 @@ class AdversarialExperimentRunner(BaseRunner):
         logdir = os.path.join(logdir, str(exp_num))
         if os.path.exists(logdir):
             shutil.rmtree(logdir)
+        os.makedirs(logdir)
         print(f'writing logs to {logdir}')
         return logdir
 
@@ -92,7 +87,7 @@ class AdversarialAttackBatteryRunner(AdversarialExperimentRunner):
             print(d)
         else:
             def is_exp_complete(i):
-                return os.path.exists(os.path.join(logdir, str(i), 'task.pkl'))
+                return os.path.exists(os.path.join(logdir, str(i), 'metrics.json'))
             exp_params = self.task.get_experiment_params()
             exp_name = f'-{exp_name}' if len(exp_name) > 0 else exp_name
             task_name = self.task._cls.__name__
