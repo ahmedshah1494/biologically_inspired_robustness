@@ -115,8 +115,12 @@ def get_imagenet100_81_params(num_train=127500, num_test=5000, train_transforms=
     return get_dataset_params(f'{logdir_root}/imagenet-100/bin/81', SupportedDatasets.IMAGENET100_81, 
                                 num_train, num_test, train_transforms, test_transforms)
 
-def get_imagenet_params(num_train=127, num_test=5, train_transforms=None, test_transforms=None):
+def get_imagenet_params(num_train=128, num_test=8, train_transforms=None, test_transforms=None):
     return get_dataset_params(f'{logdir_root}/imagenet/shards2/', SupportedDatasets.IMAGENET, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_ecoset_params(num_train=176, num_test=8, train_transforms=None, test_transforms=None):
+    return get_dataset_params(f'{logdir_root}/ecoset/shards/', SupportedDatasets.ECOSET, 
                                 num_train, num_test, train_transforms, test_transforms)
 
 def get_imagenet_folder_params(num_train=1_271_000, num_test=50_000, train_transforms=None, test_transforms=None):
