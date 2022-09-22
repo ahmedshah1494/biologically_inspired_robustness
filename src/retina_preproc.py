@@ -15,6 +15,7 @@ from attrs import define
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from einops import rearrange
+from adversarialML.biologically_inspired_models.retinawarp.retina import retina_pt
 
 def convert_image_tensor_to_ndarray(img):
     return img.cpu().detach().transpose(0,1).transpose(1,2).numpy()
@@ -115,6 +116,47 @@ def dist_to_prob(d, scale):
     p_coords /= max(p_coords.max(), 1.)
     return p_coords
 
+class GaussianBlurLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        kernel_size: int = None
+        std: float = None
+        prob: float = 1.
+
+    def __init__(self, params) -> None:
+        super().__init__(params)
+        self.std = self.params.std
+        if self.params.kernel_size is None:
+            self.kernel_size = 4*int(self.std+1) + 1
+        else:
+            self.kernel_size = self.params.kernel_size
+        self.gblur = torchvision.transforms.GaussianBlur(self.kernel_size, self.std)
+    
+    def forward(self, img):
+        return self.gblur(img)
+
+class GreyscaleLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        clr_wt: float = 0
+    
+    def forward(self, x: torch.Tensor):
+        gx = torch.repeat_interleave(x.mean(1, keepdim=True), x.shape[1], 1)
+        return (self.params.clr_wt) * x + (1 - self.params.clr_wt) * gx
+
+class GaussianNoiseLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        std: float = None
+
+    def __init__(self, params) -> None:
+        super().__init__(params)
+        self.std = self.params.std
+    
+    def forward(self, img):
+        d = torch.empty_like(img).normal_(0, self.std)
+        return img + d
+
 class AbstractRetinaFilter(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
@@ -124,9 +166,9 @@ class AbstractRetinaFilter(AbstractModel):
     
     def _get_loc(self):
         if self.params.loc_mode == 'center':
-            loc = (self.input_shape[1]//2, self.input_shape[1]//2)
+            loc = (self.params.input_shape[1]//2, self.params.input_shape[1]//2)
         elif self.params.loc_mode == 'random_uniform':
-            loc = (np.random.randint(0, self.input_shape[1]), np.random.randint(0, self.input_shape[2]))
+            loc = (np.random.randint(0, self.params.input_shape[1]), np.random.randint(0, self.params.input_shape[2]))
         else:
             raise ValueError('params.loc_mode must be "center" or "random_uniform"')
         return loc
@@ -149,7 +191,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         cone_std: float = None
         rod_std: float = None
         max_rod_density: float = None
-        kernel_size: int = None
+        max_kernel_size: int = np.inf
         scale: float = 0.05
 
     def __init__(self, params, eps=1e-5) -> None:
@@ -161,23 +203,29 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         self.eps = eps
         self.scale = self.params.scale
 
+        img_width = max(self.input_shape[1:])
+        max_kernel_size = min(self.params.max_kernel_size, img_width)
+
         max_dim = max(self.input_shape)
         d = np.arange(max_dim)/max_dim
         cone_density = dist_to_prob(d, self.cone_std)
-        clr_isobox_w, clr_avg_bins, bins = get_isodensity_box_width(cone_density, 'auto')
+        clr_isobox_w, clr_avg_bins, bins = get_isodensity_box_width(cone_density, 'auto', min_bincount=img_width//16)
         self.clr_isobox_w = clr_isobox_w
         self.clr_avg_bins = clr_avg_bins
-        print(clr_isobox_w, clr_avg_bins)
 
         self.rod_density = (1 - dist_to_prob(d, self.rod_std)) * self.max_rod_density
-        gry_isobox_w, gry_avg_bins, _ = get_isodensity_box_width(-self.rod_density, 'auto')
+        gry_isobox_w, gry_avg_bins, _ = get_isodensity_box_width(-self.rod_density, 'auto', min_bincount=img_width//16)
         self.gry_avg_bins = -gry_avg_bins
         self.gry_isobox_w = gry_isobox_w
-        print(gry_isobox_w, gry_avg_bins)
 
-        self.kernel_size = self.params.kernel_size
-        if self.kernel_size % 2 == 0:
-            self.kernel_size -= 1
+        clr_stds = [self.prob2std(p) for p in self.clr_avg_bins]
+        gry_stds = [self.prob2std(p) for p in self.gry_avg_bins]
+        print(clr_isobox_w, clr_stds)
+        print(gry_isobox_w, gry_stds)
+
+        max_std = max(clr_stds + gry_stds)
+        self.kernel_size = min(4*int(max_std+1)+1, max_kernel_size)
+
         self.clr_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.clr_avg_bins])
         self.gry_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.gry_avg_bins])
 
@@ -196,7 +244,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
 
         final_img = (rod_density_mat*gry_filtered_img + cone_density_mat*clr_filtered_img) / (rod_density_mat+cone_density_mat)
         final_img = torch.clamp(final_img, 0, 1.)
-        # nplots = 5
+        nplots = 5
         # print(img[0].min(), img[0].max(), clr_filtered_img[0].min(), clr_filtered_img[0].max(), gry_filtered_img[0].min(), gry_filtered_img[0].max(), final_img[0].min(), final_img[0].max())
         # f = plt.figure(figsize=(20,nplots))
         # plt.subplot(1,nplots,1)
@@ -467,3 +515,19 @@ class RetinaNonUniformPatchEmbedding(AbstractRetinaFilter):
             return logits, loss
         else:
             return loss
+
+class RetinaWarp(AbstractRetinaFilter):
+    def __repr__(self):
+        return f'RetinaWarp(loc_mode={self.params.loc_mode})'
+    def _forward_batch(self, x, loc_idx):
+        loc_idx = loc_idx - np.array(x.shape[2:]) / 2
+        warped = retina_pt.warp_image(x, max(x.shape[2:]), loc_idx)
+        # i = warped[0].transpose(0,1).transpose(1,2).cpu().detach().numpy()
+        # plt.figure()
+        # ax = plt.subplot(1,2,1)
+        # ax.imshow(i)
+        # ax = plt.subplot(1,2,2)
+        # ax.imshow(x[0].transpose(0,1).transpose(1,2).cpu().detach().numpy())
+        # plt.savefig('input.png')
+        # plt.close()
+        return warped
