@@ -153,6 +153,9 @@ class GaussianNoiseLayer(AbstractModel):
         super().__init__(params)
         self.std = self.params.std
     
+    def __repr__(self):
+        return f"GaussianNoiseLayer(std={self.std})"
+    
     def forward(self, img):
         d = torch.empty_like(img).normal_(0, self.std)
         return img + d
@@ -161,8 +164,19 @@ class AbstractRetinaFilter(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
         input_shape: Union[int, List[int]] = None
-        loc_mode: Literal['center', 'random_uniform'] = 'random_uniform'
+        loc_mode: Literal['center', 'random_uniform', 'five_fixations'] = 'random_uniform'
         batch_size: int = 128
+
+    def _get_five_fixations(self, img):
+        _, _, h, w = img.shape
+        pts = [
+            (h//6, w//6),
+            (h//6, w-w//6),
+            (h//2, w//2),
+            (h-h//6, w//6),
+            (h-h//6, w-w//6),
+        ]
+        return pts
     
     def _get_loc(self):
         if self.params.loc_mode == 'center':
@@ -177,12 +191,18 @@ class AbstractRetinaFilter(AbstractModel):
         pass
 
     def forward(self, x, loc_idx=None):
-        batches = torch.split(x, self.params.batch_size)
-        filtered = [self._forward_batch(b, self._get_loc() if loc_idx is None else loc_idx) for b in batches]
-        if len(filtered) > 1:
-            filtered = torch.cat(filtered, dim=0)
+        if self.params.loc_mode == 'five_fixations':
+            locs = self._get_five_fixations(x)
+            filtered = [self._forward_batch(x, loc) for loc in locs]
+            filtered = torch.stack(filtered, dim=1)
+            filtered = filtered.reshape(-1, *(filtered.shape[2:]))
         else:
-            filtered = filtered[0]
+            batches = torch.split(x, self.params.batch_size)
+            filtered = [self._forward_batch(b, self._get_loc() if loc_idx is None else loc_idx) for b in batches]
+            if len(filtered) > 1:
+                filtered = torch.cat(filtered, dim=0)
+            else:
+                filtered = filtered[0]
         return filtered
 
 class RetinaBlurFilter(AbstractRetinaFilter):
@@ -192,6 +212,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         rod_std: float = None
         max_rod_density: float = None
         max_kernel_size: int = np.inf
+        view_scale: Union[int, str] = None
         scale: float = 0.05
 
     def __init__(self, params, eps=1e-5) -> None:
@@ -223,24 +244,64 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         print(clr_isobox_w, clr_stds)
         print(gry_isobox_w, gry_stds)
 
+        if isinstance(self.params.view_scale, int):
+            self.view_scale = min(self.params.view_scale, len(clr_stds), len(gry_stds))
+        else:
+            self.view_scale = self.params.view_scale
+
         max_std = max(clr_stds + gry_stds)
-        self.kernel_size = min(4*int(max_std+1)+1, max_kernel_size)
+        self.kernel_size = min(4*int(np.ceil(max_std))+1, max_kernel_size)
 
         self.clr_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.clr_avg_bins])
         self.gry_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.gry_avg_bins])
 
     
     def __repr__(self):
-        return f'RetinaBlurFilter(loc_mode={self.params.loc_mode}, cone_std={self.cone_std}, rod_std={self.rod_std}, max_rod_density={self.max_rod_density}, kernel_size={self.kernel_size})'
+        return f'RetinaBlurFilter(loc_mode={self.params.loc_mode}, cone_std={self.cone_std}, rod_std={self.rod_std}, max_rod_density={self.max_rod_density}, kernel_size={self.kernel_size}, view_scale={self.view_scale})'
     
     def prob2std(self, p):
         s = self.scale*max(self.input_shape[1:])*(1-p) + 1e-5
         return s
-    
+
+    def _get_view_scale(self):
+        if isinstance(self.view_scale, int):
+            return self.view_scale
+        else:
+            if self.view_scale is None:
+                s = 0
+            elif self.view_scale == 'random_uniform':
+                max_s = min(len(self.clr_isobox_w), len(self.gry_isobox_w)) - 1
+                s = np.random.randint(0, max_s)
+            else:
+                raise ValueError(f'view_scale must be either None or random_uniform but got {self.view_scale}')
+            return s
+
     def _forward_batch(self, img, loc_idx):
+        s = self._get_view_scale()
+        # print(f'view_scale={s}')
+        assert not ((self.params.view_scale is None) and (s > 0))
+        if s > 0:
+            gry_isobox_w = self.gry_isobox_w[:-s]
+            gry_avg_bins = self.gry_avg_bins[s:]
+            gry_kernels = self.gry_kernels[s:]
+            clr_isobox_w = self.clr_isobox_w[:-s]
+            clr_avg_bins = self.clr_avg_bins[s:]
+            clr_kernels = self.clr_kernels[s:]
+        else:
+            gry_isobox_w = self.gry_isobox_w
+            gry_avg_bins = self.gry_avg_bins
+            gry_kernels = self.gry_kernels
+            clr_isobox_w = self.clr_isobox_w
+            clr_avg_bins = self.clr_avg_bins
+            clr_kernels = self.clr_kernels
+        # print(clr_isobox_w, self.clr_isobox_w)
+        # print([self.prob2std(p) for p in clr_avg_bins], [self.prob2std(p) for p in self.clr_avg_bins])
+        # print(gry_isobox_w, self.gry_isobox_w)
+        # print([self.prob2std(p) for p in gry_avg_bins], [self.prob2std(p) for p in self.gry_avg_bins])
+        
         grey_img = torch.repeat_interleave(img.mean(1, keepdims=True), 3, 1)
-        gry_filtered_img, rod_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(grey_img, self.gry_isobox_w, self.gry_avg_bins, loc_idx, self.gry_kernels, self.kernel_size)
-        clr_filtered_img, cone_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(img, self.clr_isobox_w, self.clr_avg_bins, loc_idx, self.clr_kernels, self.kernel_size)
+        gry_filtered_img, rod_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(grey_img, gry_isobox_w, gry_avg_bins, loc_idx, gry_kernels, self.kernel_size)
+        clr_filtered_img, cone_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(img, clr_isobox_w, clr_avg_bins, loc_idx, clr_kernels, self.kernel_size)
 
         final_img = (rod_density_mat*gry_filtered_img + cone_density_mat*clr_filtered_img) / (rod_density_mat+cone_density_mat)
         final_img = torch.clamp(final_img, 0, 1.)
