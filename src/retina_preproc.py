@@ -148,6 +148,7 @@ class GaussianNoiseLayer(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
         std: float = None
+        add_noise_during_inference: bool = False
 
     def __init__(self, params) -> None:
         super().__init__(params)
@@ -157,8 +158,20 @@ class GaussianNoiseLayer(AbstractModel):
         return f"GaussianNoiseLayer(std={self.std})"
     
     def forward(self, img):
-        d = torch.empty_like(img).normal_(0, self.std)
+        if self.training:
+            d = torch.empty_like(img).normal_(0, self.std)
+        else:
+            d = 0
         return img + d
+
+    def compute_loss(self, x, y, return_logits=True):
+        out = self.forward(x)
+        logits = out
+        loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
 
 class AbstractRetinaFilter(AbstractModel):
     @define(slots=False)
@@ -213,6 +226,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         max_rod_density: float = None
         max_kernel_size: int = np.inf
         view_scale: Union[int, str] = None
+        only_color: bool = False
         scale: float = 0.05
 
     def __init__(self, params, eps=1e-5) -> None:
@@ -223,6 +237,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         self.max_rod_density = self.params.max_rod_density
         self.eps = eps
         self.scale = self.params.scale
+        self.include_gry_img = not self.params.only_color
 
         img_width = max(self.input_shape[1:])
         max_kernel_size = min(self.params.max_kernel_size, img_width)
@@ -253,7 +268,8 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         self.kernel_size = min(4*int(np.ceil(max_std))+1, max_kernel_size)
 
         self.clr_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.clr_avg_bins])
-        self.gry_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.gry_avg_bins])
+        if self.include_gry_img:
+            self.gry_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.gry_avg_bins])
 
     
     def __repr__(self):
@@ -281,16 +297,18 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         # print(f'view_scale={s}')
         assert not ((self.params.view_scale is None) and (s > 0))
         if s > 0:
-            gry_isobox_w = self.gry_isobox_w[:-s]
-            gry_avg_bins = self.gry_avg_bins[s:]
-            gry_kernels = self.gry_kernels[s:]
+            if self.include_gry_img:
+                gry_isobox_w = self.gry_isobox_w[:-s]
+                gry_avg_bins = self.gry_avg_bins[s:]
+                gry_kernels = self.gry_kernels[s:]
             clr_isobox_w = self.clr_isobox_w[:-s]
             clr_avg_bins = self.clr_avg_bins[s:]
             clr_kernels = self.clr_kernels[s:]
         else:
-            gry_isobox_w = self.gry_isobox_w
-            gry_avg_bins = self.gry_avg_bins
-            gry_kernels = self.gry_kernels
+            if self.include_gry_img:
+                gry_isobox_w = self.gry_isobox_w
+                gry_avg_bins = self.gry_avg_bins
+                gry_kernels = self.gry_kernels
             clr_isobox_w = self.clr_isobox_w
             clr_avg_bins = self.clr_avg_bins
             clr_kernels = self.clr_kernels
@@ -299,11 +317,14 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         # print(gry_isobox_w, self.gry_isobox_w)
         # print([self.prob2std(p) for p in gry_avg_bins], [self.prob2std(p) for p in self.gry_avg_bins])
         
-        grey_img = torch.repeat_interleave(img.mean(1, keepdims=True), 3, 1)
-        gry_filtered_img, rod_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(grey_img, gry_isobox_w, gry_avg_bins, loc_idx, gry_kernels, self.kernel_size)
         clr_filtered_img, cone_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(img, clr_isobox_w, clr_avg_bins, loc_idx, clr_kernels, self.kernel_size)
+        if self.include_gry_img:
+            grey_img = torch.repeat_interleave(img.mean(1, keepdims=True), 3, 1)
+            gry_filtered_img, rod_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(grey_img, gry_isobox_w, gry_avg_bins, loc_idx, gry_kernels, self.kernel_size)
 
-        final_img = (rod_density_mat*gry_filtered_img + cone_density_mat*clr_filtered_img) / (rod_density_mat+cone_density_mat)
+            final_img = (rod_density_mat*gry_filtered_img + cone_density_mat*clr_filtered_img) / (rod_density_mat+cone_density_mat)
+        else:
+            final_img = clr_filtered_img
         final_img = torch.clamp(final_img, 0, 1.)
         nplots = 5
         # print(img[0].min(), img[0].max(), clr_filtered_img[0].min(), clr_filtered_img[0].max(), gry_filtered_img[0].min(), gry_filtered_img[0].max(), final_img[0].min(), final_img[0].max())
