@@ -4,7 +4,7 @@ from adversarialML.biologically_inspired_models.src.models import (
     CommonModelParams, GeneralClassifier, SequentialLayers, XResNet34, XResNet18, XResNet50, WideResnet,
     ActivationLayer, BatchNorm2DLayer)
 from adversarialML.biologically_inspired_models.src.retina_preproc import (
-    RetinaBlurFilter, RetinaNonUniformPatchEmbedding, RetinaWarp, GaussianBlurLayer)
+    RetinaBlurFilter, RetinaNonUniformPatchEmbedding, RetinaWarp, GaussianBlurLayer, GaussianNoiseLayer)
 from adversarialML.biologically_inspired_models.src.supconloss import \
     TwoCropTransform
 from adversarialML.biologically_inspired_models.src.trainers import MixedPrecisionAdversarialTrainer, LightningAdversarialTrainer
@@ -104,6 +104,18 @@ class Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18(AbstractTask):
             logdir=LOGDIR, batch_size=128
         )
 
+class Ecoset10NoisyGaussianBlurS2500CyclicLR1e_1RandAugmentXResNet2x18(Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18):
+    noise_std = 0.25
+    def get_model_params(self):
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
+        rblur_p = GaussianBlurLayer.ModelParams(GaussianBlurLayer, std=10.5)
+        rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 10), num_classes=10,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, resnet_p)
+        return p
+
 class Ecoset100GaussianBlurCyclicLRRandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224
     input_size = [3, imgs_size, imgs_size]
@@ -113,7 +125,7 @@ class Ecoset100GaussianBlurCyclicLRRandAugmentXResNet2x18(AbstractTask):
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
-                torchvision.transforms.AutoAugment()
+                torchvision.transforms.RandAugment(magnitude=15)
             ],
             test_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
@@ -132,13 +144,13 @@ class Ecoset100GaussianBlurCyclicLRRandAugmentXResNet2x18(AbstractTask):
     def get_experiment_params(self) -> BaseExperimentConfig:
         nepochs = 40
         return BaseExperimentConfig(
-            MixedPrecisionAdversarialTrainer.TrainerParams(MixedPrecisionAdversarialTrainer,
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
                 TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
                     tracking_mode='max', scheduler_step_after_epoch=False
                 )
             ),
             SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
-            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=1839, pct_start=0.2, anneal_strategy='linear'),
+            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=1839, pct_start=0.05, anneal_strategy='cos'),
             logdir=LOGDIR, batch_size=256
         )
 
@@ -188,3 +200,15 @@ class Cifar10GaussianBlurCyclicLRAutoAugmentWideResNet4x22(Cifar10GaussianBlurCy
 
 class Cifar10GaussianBlurCyclicLRAutoAugmentWideResNet8x22(Cifar10GaussianBlurCyclicLRAutoAugmentWideResNet1x22):
     widen_factor = 8
+
+class Cifar10NoisyGaussianBlurCyclicLRAutoAugmentWideResNet4x22(Cifar10GaussianBlurCyclicLRAutoAugmentWideResNet4x22):
+    noise_std = 0.0625
+    def get_model_params(self):
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
+        rblur_p = GaussianBlurLayer.ModelParams(GaussianBlurLayer, std=1.5)
+        rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        resnet_p = WideResnet.ModelParams(WideResnet, CommonModelParams(self.input_size, 10), num_classes=10, 
+                                            normalization_layer_params=NormalizationLayer.get_params(), depth=self.depth, 
+                                            widen_factor=self.widen_factor)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, resnet_p)
+        return p
