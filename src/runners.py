@@ -1,34 +1,64 @@
 import os
+import re
 import shutil
 from attrs import define, field
 from mllib.runners.base_runners import BaseRunner
+from mllib.runners.configs import BaseExperimentConfig
 import torch
 from mllib.datasets.dataset_factory import SupportedDatasets
 from adversarialML.biologically_inspired_models.src.utils import write_pickle
 import webdataset as wds
+@define(slots=False)
+class TransferLearningExperimentConfig(BaseExperimentConfig):
+    seed_model_path: str = None
+    keys_to_skip_regex: str = None
+    keys_to_freeze_regex: str = None
+
+def print_num_params(model):
+    ntrainable = 0
+    total = 0
+    for p in model.parameters():
+        if p.requires_grad:
+            ntrainable += p.numel()
+        total += p.numel()
+    print(f'total parameters={total/1e6}M\ntrainable parameters={ntrainable/1e6}M')
+
+def load_params_into_model(src_model: torch.nn.Module, tgt_model: torch.nn.Module, keys_to_skip_rgx=None, keys_to_freeze_regex=None):
+    if isinstance(src_model, dict):
+        # This condition is used to load pytorch lightning checkpoints into
+        # non-PL trainers, usually for evaluation
+        src_sd = src_model['state_dict']
+        # state dicts in PL checkpoint contain keys of the form "model.{...}",
+        # so we must remove "model." to match them with model keys.
+        src_sd = {k.replace('model.','', 1): v for k,v in src_sd.items()}
+    else:
+        src_sd = src_model.state_dict()
+    if keys_to_skip_rgx is not None:
+        src_sd = {k:v for k,v in src_sd.items() if not re.match(keys_to_skip_rgx, k)}
+    mismatch = tgt_model.load_state_dict(src_sd, strict=False)
+    if len(mismatch.missing_keys) > 0:
+        for k in mismatch.missing_keys:
+            print(f'keeping {k} from target model')
+    if len(mismatch.unexpected_keys) > 0:
+        print('got unexpected keys:', mismatch.unexpected_keys)
+    if keys_to_freeze_regex is not None:
+        for n, p in tgt_model.named_parameters():
+            if re.match(keys_to_freeze_regex, n):
+                p.requires_grad = False
+                print(f'freezing {n} in target model')
+    return tgt_model
 
 class AdversarialExperimentRunner(BaseRunner):
     def create_model(self) -> torch.nn.Module:
         p = self.task.get_model_params()
         model: torch.nn.Module = p.cls(p)
-        if self.load_model_from_ckp:
+        ep = self.task.get_experiment_params()
+        if self.load_model_from_ckp or (getattr(ep, 'seed_model_path', None) is not None) :
+            if self.ckp_pth is None:
+                self.ckp_pth = getattr(ep, 'seed_model_path', None)
             src_model = self.load_model()
-            if isinstance(src_model, dict):
-                # This condition is used to load pytorch lightning checkpoints into
-                # non-PL trainers, usually for evaluation
-                src_sd = src_model['state_dict']
-                # state dicts in PL checkpoint contain keys of the form "model.{...}",
-                # so we must remove "model." to match them with model keys.
-                src_sd = {k.replace('model.','', 1): v for k,v in src_sd.items()}
-            else:
-                src_sd = src_model.state_dict()
-            tgt_sd = model.state_dict()
-            mismatch = model.load_state_dict(src_sd, strict=False)
-            if len(mismatch.missing_keys) > 0:
-                for k in mismatch.missing_keys:
-                    print(f'keeping {k} from model')
-            if len(mismatch.unexpected_keys) > 0:
-                print('got unexpected keys:', mismatch.unexpected_keys)
+            model = load_params_into_model(src_model, model, getattr(ep, 'keys_to_skip_regex', None), getattr(ep, 'keys_to_freeze_regex', None))
+        print_num_params(model)
         return model
     
     def create_dataloaders(self):
@@ -47,9 +77,9 @@ class AdversarialExperimentRunner(BaseRunner):
             val_loader = wds.WebLoader(val_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(val_dataset) // p.batch_size)
             test_loader = wds.WebLoader(test_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(test_dataset) // p.batch_size)
         else:
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=p.batch_size, shuffle=True, num_workers=8, pin_memory=True)
-            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=p.batch_size, shuffle=False, num_workers=8, pin_memory=True)
-            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=p.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=p.batch_size, shuffle=True, num_workers=10, pin_memory=True, persistent_workers=True)
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True)
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True)
 
         return train_loader, val_loader, test_loader
         
@@ -77,9 +107,9 @@ class AdversarialExperimentRunner(BaseRunner):
         return logdir
 
 class AdversarialAttackBatteryRunner(AdversarialExperimentRunner):
-    def __init__(self, task, ckp_pth: str = None, load_model_from_ckp: bool = False, output_to_ckp_dir=True) -> None:
+    def __init__(self, task, num_trainings: int = 1, ckp_pth: str = None, load_model_from_ckp: bool = False, output_to_ckp_dir=True, wrap_trainer_with_lightning: bool = False, lightning_kwargs=...) -> None:
         self.output_to_ckp_dir = output_to_ckp_dir
-        super().__init__(task, ckp_pth, load_model_from_ckp)
+        super().__init__(task, num_trainings, ckp_pth, load_model_from_ckp, wrap_trainer_with_lightning, lightning_kwargs)
 
     def get_experiment_dir(self, logdir, exp_name):
         if self.output_to_ckp_dir:
@@ -118,5 +148,5 @@ class RandomizedSmoothingRunner(AdversarialAttackBatteryRunner):
     def save_task(self):
         if not os.path.exists(os.path.join(self.trainer.logdir, 'task.pkl')):
             self.task.save_task(os.path.join(self.trainer.logdir, 'task.pkl'))
-        randomized_smoothing_params = self.task.get_experiment_params().randomized_smoothing_config
+        randomized_smoothing_params = self.task.get_experiment_params().trainer_params.randomized_smoothing_params
         write_pickle(randomized_smoothing_params, os.path.join(self.trainer.logdir, 'randomized_smoothing_config.pkl'))
