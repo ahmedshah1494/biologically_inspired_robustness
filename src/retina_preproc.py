@@ -58,23 +58,24 @@ def gaussian_blur_pytorch(img, kernel):
     # print(img.shape, padded_img.shape, blurred_img.shape)
     return blurred_img
 
-def _get_gaussian_filtered_image_and_density_mat_pytorch(img, isobox_w, avg_bins, loc_idx, kernels, kernel_width, shuffle_pixels=True):
-    filtered_img = torch.zeros_like(img)
+def _get_gaussian_filtered_image_and_density_mat_pytorch(img, isobox_w, avg_bins, loc_idx, kernels, kernel_width, shuffle_pixels=True, blur=True):
+    filtered_img = torch.zeros_like(img) if blur else img
     density_mat = torch.zeros_like(img)
     padded_img = nn.ReflectionPad2d(kernel_width//2)(img)
     half_ks = kernel_width//2
     loc_idx_ = np.array(loc_idx)+half_ks
     # print(loc_idx_, padded_img.shape)
     for w, p, kern in zip(isobox_w, avg_bins, kernels):
-        # fimg = gaussian_blur_pytorch(img, kern)
-        # filtered_crop = fimg[:,:, max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w]
-        # crop = img[:,:, max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w]
-        crop = padded_img[:,:, max(0,loc_idx_[0]-w-half_ks):loc_idx_[0]+w+half_ks][:,:,:,max(0,loc_idx_[1]-w-half_ks):loc_idx_[1]+w+half_ks]
-        # if shuffle_pixels and (w==max(isobox_w)):
-        #     crop = local_pixel_shuffle(crop, 4)
-        # print(w, half_ks, padded_img.shape, crop.shape, max(0,loc_idx_[0]-w-half_ks), loc_idx_[0]+w+half_ks, max(0,loc_idx_[1]-w-half_ks), loc_idx_[1]+w+half_ks)
-        filtered_crop = gaussian_blur_pytorch(crop, kern)
-        filtered_img[:,:,max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w] = filtered_crop
+        if blur:
+            # fimg = gaussian_blur_pytorch(img, kern)
+            # filtered_crop = fimg[:,:, max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w]
+            # crop = img[:,:, max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w]
+            crop = padded_img[:,:, max(0,loc_idx_[0]-w-half_ks):loc_idx_[0]+w+half_ks][:,:,:,max(0,loc_idx_[1]-w-half_ks):loc_idx_[1]+w+half_ks]
+            # if shuffle_pixels and (w==max(isobox_w)):
+            #     crop = local_pixel_shuffle(crop, 4)
+            # print(w, half_ks, padded_img.shape, crop.shape, max(0,loc_idx_[0]-w-half_ks), loc_idx_[0]+w+half_ks, max(0,loc_idx_[1]-w-half_ks), loc_idx_[1]+w+half_ks)
+            filtered_crop = gaussian_blur_pytorch(crop, kern)
+            filtered_img[:,:,max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w] = filtered_crop
         density_mat[:,:,max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w] = p
     return filtered_img, density_mat
 
@@ -135,6 +136,15 @@ class GaussianBlurLayer(AbstractModel):
     def forward(self, img):
         return self.gblur(img)
 
+    def compute_loss(self, x, y, return_logits=True):
+        out = self.forward(x)
+        logits = out
+        loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
 class GreyscaleLayer(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
@@ -149,10 +159,14 @@ class GaussianNoiseLayer(AbstractModel):
     class ModelParams(BaseParameters):
         std: float = None
         add_noise_during_inference: bool = False
+        add_deterministic_noise_during_inference: bool = False
+        max_input_size: List[int] = [3, 224, 224]
 
     def __init__(self, params) -> None:
         super().__init__(params)
         self.std = self.params.std
+        if self.params.add_deterministic_noise_during_inference:
+            self.register_buffer('noise_patch', torch.empty(self.params.max_input_size).normal_(0, self.std))
     
     def __repr__(self):
         return f"GaussianNoiseLayer(std={self.std})"
@@ -161,7 +175,11 @@ class GaussianNoiseLayer(AbstractModel):
         if self.training:
             d = torch.empty_like(img).normal_(0, self.std)
         else:
-            d = 0
+            if self.params.add_deterministic_noise_during_inference:
+                b, c, h ,w = img.shape
+                d = self.noise_patch[:c, :h, :w].unsqueeze(0)
+            else:
+                d = 0
         return img + d
 
     def compute_loss(self, x, y, return_logits=True):
@@ -227,6 +245,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         max_kernel_size: int = np.inf
         view_scale: Union[int, str] = None
         only_color: bool = False
+        no_blur: bool = False
         scale: float = 0.05
 
     def __init__(self, params, eps=1e-5) -> None:
@@ -238,6 +257,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         self.eps = eps
         self.scale = self.params.scale
         self.include_gry_img = not self.params.only_color
+        self.apply_blur = not self.params.no_blur
 
         img_width = max(self.input_shape[1:])
         max_kernel_size = min(self.params.max_kernel_size, img_width)
@@ -267,9 +287,13 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         max_std = max(clr_stds + gry_stds)
         self.kernel_size = min(4*int(np.ceil(max_std))+1, max_kernel_size)
 
-        self.clr_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.clr_avg_bins])
-        if self.include_gry_img:
-            self.gry_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.gry_avg_bins])
+        if self.apply_blur:
+            self.clr_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.clr_avg_bins])
+            if self.include_gry_img:
+                self.gry_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.gry_avg_bins])
+        else:
+            self.clr_kernels = [None]*len(self.clr_avg_bins)
+            self.gry_kernels = [None]*len(self.gry_avg_bins)
 
     
     def __repr__(self):
@@ -317,10 +341,10 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         # print(gry_isobox_w, self.gry_isobox_w)
         # print([self.prob2std(p) for p in gry_avg_bins], [self.prob2std(p) for p in self.gry_avg_bins])
         
-        clr_filtered_img, cone_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(img, clr_isobox_w, clr_avg_bins, loc_idx, clr_kernels, self.kernel_size)
+        clr_filtered_img, cone_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(img, clr_isobox_w, clr_avg_bins, loc_idx, clr_kernels, self.kernel_size, blur=self.apply_blur)
         if self.include_gry_img:
             grey_img = torch.repeat_interleave(img.mean(1, keepdims=True), 3, 1)
-            gry_filtered_img, rod_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(grey_img, gry_isobox_w, gry_avg_bins, loc_idx, gry_kernels, self.kernel_size)
+            gry_filtered_img, rod_density_mat = _get_gaussian_filtered_image_and_density_mat_pytorch(grey_img, gry_isobox_w, gry_avg_bins, loc_idx, gry_kernels, self.kernel_size, blur=self.apply_blur)
 
             final_img = (rod_density_mat*gry_filtered_img + cone_density_mat*clr_filtered_img) / (rod_density_mat+cone_density_mat)
         else:
