@@ -18,7 +18,7 @@ from adversarialML.biologically_inspired_models.src.supconloss import \
 from adversarialML.biologically_inspired_models.src.trainers import (
     ActivityOptimizationSchedule, AdversarialParams, AdversarialTrainer,
     ConsistentActivationModelAdversarialTrainer, PytorchLightningAdversarialTrainer, LightningLiteParams,
-    MixedPrecisionAdversarialTrainer)
+    MixedPrecisionAdversarialTrainer, LightningAdversarialTrainer)
 from mllib.adversarial.attacks import (AttackParamFactory, SupportedAttacks,
                                        SupportedBackend)
 
@@ -32,6 +32,8 @@ from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
 from task_utils import *
+import torch
+from adversarialML.biologically_inspired_models.src import imagenet_mlp_mixer_tasks_commons
 
 def add_retina_blur_to_mlp_mixer(cnn_params, input_size, cone_std=0.12, rod_std=0.06, max_rod_density=0.12, kernel_size=9, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
     rblur = RetinaBlurFilter.ModelParams(RetinaBlurFilter, input_size, cone_std=cone_std, rod_std=rod_std, max_rod_density=max_rod_density, kernel_size=9)
@@ -1041,3 +1043,122 @@ class ImagenetCyclicLRMLPMixerS8Task(SGDCyclicLRMixin, ImagenetMLPMixerS8Task):
         p.scheduler_config = CyclicLRConfig(base_lr=1e-5, max_lr=2e-3, step_size_up=10_000, step_size_down=798*300 - 10_000, cycle_momentum=False)
         p.trainer_params.training_params.scheduler_step_after_epoch = False
         return p
+
+class ImagenetRandAugmentMLPMixerS16(AbstractTask):
+    input_width = 224
+    def get_dataset_params(self) :
+        p = get_imagenet_params(train_transforms=[
+                torchvision.transforms.Resize(self.input_width),
+                torchvision.transforms.RandomCrop(self.input_width),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.input_width),
+                torchvision.transforms.CenterCrop(self.input_width),
+            ])
+        return p
+    
+    def get_model_params(self):
+        return imagenet_mlp_mixer_tasks_commons.get_basic_mlp_mixer_params([3,self.input_width,self.input_width], 1000, 16, 512, 2048, 256, nn.GELU, 0., 8)
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=200, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            AdamOptimizerConfig(weight_decay=0.01),
+            CyclicLRConfig(base_lr=1e-6, max_lr=0.003, step_size_up=10_000, step_size_down=115_000, cycle_momentum=False),
+            logdir=LOGDIR, batch_size=512)
+
+class Ecoset10AutoAugmentMLPMixerS16(AbstractTask):
+    input_width = 224
+    def get_dataset_params(self) :
+        p = get_ecoset10_params(train_transforms=[
+                torchvision.transforms.Resize(self.input_width),
+                torchvision.transforms.RandomCrop(self.input_width),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.AutoAugment()
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.input_width),
+                torchvision.transforms.CenterCrop(self.input_width),
+            ])
+        return p
+    
+    def get_model_params(self):
+        return imagenet_mlp_mixer_tasks_commons.get_basic_mlp_mixer_params([3,self.input_width,self.input_width], 10, 16, 512, 2048, 256, nn.GELU, 0., 8)
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            AdamOptimizerConfig(weight_decay=5e-5),
+            OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=128)
+
+class Ecoset10AutoAugmentCosineAnnealMLPMixerS16(AbstractTask):
+    input_width = 224
+    def get_dataset_params(self) :
+        p = get_ecoset10_params(train_transforms=[
+                torchvision.transforms.Resize(self.input_width),
+                torchvision.transforms.RandomCrop(self.input_width),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.AutoAugment()
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.input_width),
+                torchvision.transforms.CenterCrop(self.input_width),
+            ])
+        return p
+    
+    def get_model_params(self):
+        return imagenet_mlp_mixer_tasks_commons.get_basic_mlp_mixer_params([3,self.input_width,self.input_width], 10, 16, 512, 2048, 256, nn.GELU, 0., 8)
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=True
+                )
+            ),
+            AdamOptimizerConfig(weight_decay=5e-5),
+            CosineAnnealingWarmRestartsConfig(T_0=nepochs, eta_min=1e-6),
+            logdir=LOGDIR, batch_size=128)
+
+class Ecoset10RandAugmentMLPMixerS16(AbstractTask):
+    input_width = 224
+    def get_dataset_params(self) :
+        p = get_ecoset10_params(train_transforms=[
+                torchvision.transforms.Resize(self.input_width),
+                torchvision.transforms.RandomCrop(self.input_width),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.input_width),
+                torchvision.transforms.CenterCrop(self.input_width),
+            ])
+        return p
+    
+    def get_model_params(self):
+        return imagenet_mlp_mixer_tasks_commons.get_basic_mlp_mixer_params([3,self.input_width,self.input_width], 10, 16, 512, 2048, 256, nn.GELU, 0., 8)
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            AdamOptimizerConfig(weight_decay=5e-5),
+            OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=128)
