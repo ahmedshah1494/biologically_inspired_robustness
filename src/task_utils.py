@@ -11,7 +11,7 @@ from mllib.runners.configs import BaseExperimentConfig
 
 from mllib.optimizers.configs import (AbstractOptimizerConfig, AbstractSchedulerConfig, CyclicLRConfig)
 from mllib.runners.configs import BaseExperimentConfig, TrainingParams
-from mllib.adversarial.attacks import TorchAttackAPGDInfParams
+from mllib.adversarial.attacks import TorchAttackAPGDInfParams, TorchAttackPGDInfParams
 
 hostname = gethostname()
 if 'bridges2' in hostname:
@@ -123,6 +123,26 @@ def get_ecoset_params(num_train=176, num_test=8, train_transforms=None, test_tra
     return get_dataset_params(f'{logdir_root}/ecoset/shards/', SupportedDatasets.ECOSET, 
                                 num_train, num_test, train_transforms, test_transforms)
 
+def get_ecoset_folder_params(num_train=float('inf'), num_test=28250, train_transforms=None, test_transforms=None):
+    return get_dataset_params(f'{logdir_root}/ecoset/', SupportedDatasets.ECOSET_FOLDER, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_ecoset10_params(num_train=48000, num_test=1000, train_transforms=None, test_transforms=None):
+    return get_dataset_params(f'{logdir_root}/ecoset-10/bin/320', SupportedDatasets.ECOSET10, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_ecoset10folder_params(num_train=48000, num_test=1000, train_transforms=None, test_transforms=None):
+    return get_dataset_params(f'{logdir_root}/ecoset-10', SupportedDatasets.ECOSET10_FOLDER, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_ecoset100folder_params(num_train=470638, num_test=5000, train_transforms=None, test_transforms=None):
+    return get_dataset_params(f'{logdir_root}/ecoset-100', SupportedDatasets.ECOSET100_FOLDER, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_ecoset100shards_params(num_train=40, num_test=20, train_transforms=None, test_transforms=None):
+    return get_dataset_params(f'{logdir_root}/ecoset-100/shards', SupportedDatasets.ECOSET100, 
+                                num_train, num_test, train_transforms, test_transforms)
+
 def get_imagenet_folder_params(num_train=1_271_000, num_test=50_000, train_transforms=None, test_transforms=None):
     return get_dataset_params(f'{logdir_root}/imagenet/', SupportedDatasets.IMAGENET_FOLDER, 
                                 num_train, num_test, train_transforms, test_transforms)
@@ -149,3 +169,6 @@ def get_adv_experiment_params(trainer_cls: Type[AdversarialTrainer], training_pa
 
 def get_apgd_inf_params(eps_list, nsteps, eot_iters=1):
     return [TorchAttackAPGDInfParams(eps=eps, nsteps=nsteps, eot_iter=eot_iters, seed=time()) for eps in eps_list]
+
+def get_pgd_inf_params(eps_list, nsteps, step_size):
+    return [TorchAttackPGDInfParams(eps=eps, nsteps=nsteps, step_size=step_size) for eps in eps_list]
