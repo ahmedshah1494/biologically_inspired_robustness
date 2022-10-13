@@ -1,7 +1,9 @@
 from copy import deepcopy
 from enum import Enum, auto
+from hashlib import sha224
 import os
 import shutil
+from time import time
 from typing import List, Literal, Type, Union, Tuple
 from attrs import define, field
 from mllib.trainers.base_trainers import Trainer as _Trainer
@@ -26,6 +28,17 @@ from adversarialML.biologically_inspired_models.src.pruning import PruningMixin
 from adversarialML.biologically_inspired_models.src.utils import aggregate_dicts, merge_iterables_in_dict, write_json, write_pickle, load_json, recursive_dict_update, load_pickle
 
 import torchmetrics
+from tqdm import tqdm
+
+
+def get_hash(x: Union[List, np.ndarray, torch.Tensor]):
+    if isinstance(x, torch.Tensor):
+        x = x.cpu().detach().numpy()
+    elif isinstance(x, list):
+        x = np.array(x)
+    elif not isinstance(x, np.ndarray):
+        raise ValueError(f'Type {type(x)} is unsupported for input x')
+    return sha224(x.tobytes()).hexdigest()
 
 @define(slots=False)
 class AdversarialParams:
@@ -224,7 +237,7 @@ class ActivityOptimizationParams:
 
 class ConsistentActivationModelAdversarialTrainer(AdversarialTrainer):
     @define(slots=False)
-    class ConsistentActivationModelAdversarialTrainerParams(BaseParameters):
+    class TrainerParams(BaseParameters):
         training_params: Type[TrainingParams] = field(factory=TrainingParams)
         adversarial_params: Type[AdversarialParams] = field(factory=AdversarialParams)
         act_opt_params: ActivityOptimizationParams = field(factory=ActivityOptimizationParams)
@@ -288,32 +301,18 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         super().__init__(params, *args, **kwargs)
         self.metrics_filename = 'adv_metrics.json'
         self.data_and_pred_filename = 'adv_data_and_preds.pkl'
+        self.per_sample_logdir = os.path.join(self.logdir, 'per_sample_adv_attack_results')
+        if not os.path.exists(self.per_sample_logdir):
+            os.makedirs(self.per_sample_logdir)
 
-    def save_training_logs(self, train_acc, test_accs):
-        outfile = os.path.join(self.logdir, self.metrics_filename)
-        if os.path.exists(outfile):
-            self.metrics_filename = '.'+self.metrics_filename
-            super().save_training_logs(train_acc, test_accs)
-            metrics = load_json(os.path.join(self.logdir, self.metrics_filename))
-            self.metrics_filename = self.metrics_filename[1:]
-            old_metrics = load_json(outfile)
-            recursive_dict_update(old_metrics, metrics)
-            write_json(metrics, outfile)
-        else:
-            super().save_training_logs(train_acc, test_accs)
-    
-    def save_data_and_preds(self, preds, labels, inputs, logits):
-        outfile = os.path.join(self.logdir, self.data_and_pred_filename)
-        if os.path.exists(outfile):
-            self.data_and_pred_filename = '.'+self.data_and_pred_filename
-            super().save_data_and_preds(preds, labels, inputs, logits)
-            metrics = load_pickle(os.path.join(self.logdir, self.data_and_pred_filename))
-            self.data_and_pred_filename = self.data_and_pred_filename[1:]
-            old_metrics = load_pickle(outfile)
-            recursive_dict_update(old_metrics, metrics)
-            write_pickle(metrics, outfile)
-        else:
-            super().save_data_and_preds(preds, labels, inputs, logits)
+    def save_logs_after_test(self, train_metrics, test_outputs):
+        update_and_save_logs(self.logdir, self.metrics_filename, load_json, write_json, self.save_training_logs, 
+                                train_metrics['train_accuracy'], test_outputs['test_acc'])
+        update_and_save_logs(self.logdir, self.data_and_pred_filename, load_pickle, write_pickle, self.save_data_and_preds,
+                                test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
+        # self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
+        # self.save_data_and_preds(test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
+        self.save_source_dir()        
 
     def test_epoch_end(self, outputs, metrics):
         outputs = aggregate_dicts(outputs)
@@ -357,6 +356,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
                 raise NotImplementedError(f'{type(atk)} is not supported')
             atk_name = f"{atk.__class__.__name__ if name is None else name}-{eps}"
 
+            clean_x = batch[0]
             x,y = self._maybe_attack_batch(batch, atk if eps > 0 else None)
 
             logits, loss = self._get_outputs_and_loss(x, y)
@@ -378,9 +378,16 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             test_acc[atk_name] = acc
             test_logits[atk_name] = logits.numpy()
             target_labels[atk_name] = y_tgt.detach().cpu().numpy().tolist()
+            self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
         return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels, 'logits': test_logits}, metrics
-
+    
+    def save_per_sample_results(self, atk_name, X, adv_X, Y, P):
+        for x, adv_x, y, p in zip(X, adv_X, Y, P):
+            h = get_hash(x[0])
+            np.savez(f'{self.per_sample_logdir}/adv_result_{atk_name}_{h}_input.npz', x=x, adv_x=adv_x)
+            r = {'y': int(y), 'y_pred': int(p)}
+            write_json(r, f'{self.per_sample_logdir}/adv_result_{atk_name}_{h}_output.json')
 
 @define(slots=False)
 class RandomizedSmoothingParams:
@@ -397,13 +404,18 @@ class RandomizedSmoothingEvaluationTrainer(_Trainer):
     class TrainerParams(BaseParameters):
         training_params: Type[TrainingParams] = field(factory=TrainingParams)
         randomized_smoothing_params: RandomizedSmoothingParams = field(factory=RandomizedSmoothingParams)
+        exp_name: str = ''
     
     def __init__(self, params: TrainerParams, *args, **kwargs):
         super().__init__(params, *args, **kwargs)
+        print(self.model)
         self.params = params
         self.smoothed_models = [Smooth(self.model, self.params.randomized_smoothing_params.num_classes, s) for s in self.params.randomized_smoothing_params.sigmas]
         self.metrics_filename = 'randomized_smoothing_metrics.json'
         self.data_and_pred_filename = 'randomized_smoothing_preds_and_radii.pkl'
+        self.per_sample_logdir = os.path.join(self.logdir, 'per_sample_randomized_smoothing_results')
+        if not os.path.exists(self.per_sample_logdir):
+            os.makedirs(self.per_sample_logdir)
     
     def _single_sample_step(self, smoothed_model, x):
         if self.params.randomized_smoothing_params.mode == 'certify':
@@ -427,17 +439,26 @@ class RandomizedSmoothingEvaluationTrainer(_Trainer):
         for smoothed_model in self.smoothed_models:
             _preds = []
             _radii = []
-            for x_ in x:
+            for i,(y_,x_) in tqdm(enumerate(zip(y, x))):
+                if i < 94:
+                    print(f'skipping {i}')
+                    continue
                 p,r = self._single_sample_step(smoothed_model, x_)
+                self.save_single_sample_results(get_hash(x_[0]), f'{self.params.exp_name}{smoothed_model.sigma}', y_, p, r)
                 _preds.append(p)
                 _radii.append(r)
             # _preds = torch.stack(_preds)
             # _radii = torch.stack(_radii)
-            preds[smoothed_model.sigma] = _preds#.detach().cpu().numpy().tolist()
-            radii[smoothed_model.sigma] = _radii#.detach().cpu().numpy().tolist()
-            acc[smoothed_model.sigma] = (np.array(_preds) == y).astype(float).mean()
+            preds[f'{self.params.exp_name}{smoothed_model.sigma}'] = _preds#.detach().cpu().numpy().tolist()
+            radii[f'{self.params.exp_name}{smoothed_model.sigma}'] = _radii#.detach().cpu().numpy().tolist()
+            acc[f'{self.params.exp_name}{smoothed_model.sigma}'] = (np.array(_preds) == y).astype(float).mean()
         metrics = {f'test_acc_{k}':v for k,v in acc.items()}
+
         return {'preds': preds, 'radii': radii, 'labels':y.tolist(), 'inputs':x.detach().cpu().numpy()}, metrics
+
+    def save_single_sample_results(self, i, name, y, y_pred, radius):
+        r = {'Y':int(y), 'Y_pred':int(y_pred), 'radius': float(radius)}
+        write_json(r, f'{self.per_sample_logdir}/rs_result_{name}_{i}.json')
     
     def save_training_logs(self, train_acc, test_accs):
         metrics = {
@@ -479,11 +500,7 @@ class RandomizedSmoothingEvaluationTrainer(_Trainer):
         test_outputs, test_metrics = self.test_loop(post_loop_fn=self.test_epoch_end)
         print('test metrics:')
         print(test_metrics)
-        _, train_metrics = self._batch_loop(self.val_step, self.train_loader, 0, logging=False)
-        for k in train_metrics:
-            train_metrics[k.replace('val', 'train')] = train_metrics.pop(k)
-        train_metrics = aggregate_dicts(train_metrics)
-        self.save_logs_after_test(train_metrics, test_outputs)
+        self.save_logs_after_test({'train_accuracy': 0.}, test_outputs)
 
 
 class LightningAdversarialTrainer(PytorchLightningTrainer, PruningMixin):
@@ -500,9 +517,10 @@ class LightningAdversarialTrainer(PytorchLightningTrainer, PruningMixin):
         super().__init__(params, *args, **kwargs)
         print(self.model)
         self.params = params
-        self.training_adv_attack = self._maybe_get_attacks(params.adversarial_params.training_attack_params)
-        if isinstance(self.training_adv_attack, tuple):
-            self.training_adv_attack = self.training_adv_attack[1]
+        self.training_adv_attack = None
+        # self.training_adv_attack = self._maybe_get_attacks(params.adversarial_params.training_attack_params)
+        # if isinstance(self.training_adv_attack, tuple):
+        #     self.training_adv_attack = self.training_adv_attack[1]
         self.testing_adv_attacks = self._maybe_get_attacks(params.adversarial_params.testing_attack_params)
         self.test_accuracy_trackers = torch.nn.ModuleList([torchmetrics.Accuracy() for a in self.testing_adv_attacks])
         self.data_and_pred_filename = 'data_and_preds.pkl'
@@ -542,9 +560,16 @@ class LightningAdversarialTrainer(PytorchLightningTrainer, PruningMixin):
                 x = adv_attack(x, y)
         return x,y
 
-    def forward_step(self, batch, batch_idx):
+    def training_step(self, batch, batch_idx):
+        if self.training_adv_attack is None:
+            self.training_adv_attack = self._maybe_get_attacks(self.params.adversarial_params.training_attack_params)
+            if isinstance(self.training_adv_attack, tuple):
+                self.training_adv_attack = self.training_adv_attack[1]
         batch = self._maybe_attack_batch(batch, self.training_adv_attack)
-        return super().forward_step(batch, batch_idx)
+        return super().training_step(batch, batch_idx)
+    
+    def validation_step(self, batch, batch_idx):
+        return super().validation_step(batch, batch_idx)
 
     def test_step(self, batch, batch_idx):
         test_eps = [(p.eps if p is not None else 0.) for p in self.params.adversarial_params.testing_attack_params]
