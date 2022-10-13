@@ -1,5 +1,6 @@
 import time
-from typing import List, Type, Union
+from typing import Callable, List, Type, Union
+import warnings
 from attrs import define, field
 from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
@@ -889,6 +890,8 @@ class GeneralClassifier(AbstractModel):
         input_size: List[int] = None
         feature_model_params: BaseParameters = None
         classifier_params: BaseParameters = None
+        logit_ensembler_params: BaseParameters = None
+        loss_fn: nn.Module = nn.CrossEntropyLoss
     
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -913,6 +916,11 @@ class GeneralClassifier(AbstractModel):
         else:
             cls_params.input_size = x.shape[1:]
         self.classifier = cls_params.cls(cls_params)
+        if self.params.logit_ensembler_params is not None:
+            self.logit_ensembler = self.params.logit_ensembler_params.cls(self.params.logit_ensembler_params)
+        else:
+            self.logit_ensembler = nn.Identity()
+        self.loss_fn = self.params.loss_fn()
     
     def forward(self, x, *fwd_args, **fwd_kwargs):
         y = self.feature_model.forward(x, *fwd_args, **fwd_kwargs)
@@ -935,6 +943,7 @@ class GeneralClassifier(AbstractModel):
         else:
             logits = out
             cls_extra_outputs = ()
+        logits = self.logit_ensembler(logits)
         if len(cls_extra_outputs) == 0 and len(conv_extra_outputs) == 0:
             return logits
         extra_outputs = list(zip(*extra_outputs))
@@ -948,10 +957,11 @@ class GeneralClassifier(AbstractModel):
         else:
             logits = out
             extra_outputs = ()
-        if (logits.dim() == 1) or ((logits.dim() > 1) and (logits.shape[-1] == 1)):
-            loss = nn.functional.binary_cross_entropy_with_logits(logits, y)
-        else:
-            loss = nn.functional.cross_entropy(logits, y)
+        # if (logits.dim() == 1) or ((logits.dim() > 1) and (logits.shape[-1] == 1)):
+        #     loss = nn.functional.binary_cross_entropy_with_logits(logits, y)
+        # else:
+        #     loss = nn.functional.cross_entropy(logits, y)
+        loss = self.loss_fn(logits, y)
         if len(extra_outputs) > 0:
             loss = loss #+ torch.stack(extra_outputs[0], 0).sum(0)
             extra_outputs = extra_outputs[1:]
@@ -1201,6 +1211,7 @@ class XResNet34(AbstractModel):
         setup_feature_extraction: bool = False
         setup_classification: bool = True
         num_classes: int = None
+        widen_factor: int = 1.
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -1212,6 +1223,7 @@ class XResNet34(AbstractModel):
                                 c_in=self.params.common_params.input_size[0],
                                 n_out=self.params.common_params.num_units,
                                 act_cls=self.params.common_params.activation,
+                                widen=self.params.widen_factor
                             )
         resnet[-1] = nn.Identity()
         return resnet
@@ -1251,20 +1263,22 @@ class XResNet34(AbstractModel):
 class XResNet18(XResNet34):
     def _make_resnet(self):
         resnet = xresnet18(p=self.params.common_params.dropout_p,
-                                    c_in=self.params.common_params.input_size[0],
-                                    n_out=self.params.common_params.num_units,
-                                    act_cls=self.params.common_params.activation,
-                                )
+                                c_in=self.params.common_params.input_size[0],
+                                n_out=self.params.common_params.num_units,
+                                act_cls=self.params.common_params.activation,
+                                widen=self.params.widen_factor
+                            )
         resnet[-1] = nn.Identity()
         return resnet
 
 class XResNet50(XResNet34):
     def _make_resnet(self):
         resnet = xresnet50(p=self.params.common_params.dropout_p,
-                                    c_in=self.params.common_params.input_size[0],
-                                    n_out=self.params.common_params.num_units,
-                                    act_cls=self.params.common_params.activation,
-                                )
+                                c_in=self.params.common_params.input_size[0],
+                                n_out=self.params.common_params.num_units,
+                                act_cls=self.params.common_params.activation,
+                                widen=self.params.widen_factor
+                            )
         resnet[-1] = nn.Identity()
         return resnet
 
@@ -1278,3 +1292,37 @@ class WideResnet(XResNet34):
         resnet = Wide_ResNet(self.params.depth, self.params.widen_factor, self.params.common_params.dropout_p, self.params.num_classes)
         resnet.linear = nn.Identity()
         return resnet
+
+class LogitAverageEnsembler(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        n: int = None
+        activation: nn.Module = nn.Identity
+    
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+        self.activation = self.params.activation()
+
+    def __repr__(self):
+        return f'LogitAverageEnsembler(n={self.params.n}, act={self.activation})'
+
+    def forward(self, x):
+        # Assumes that all the logits from the n instances are consecuitve i.e.
+        # x = x_.reshape(-1, C) where x_.shape = [b, n, C]
+        bn, c = x.shape
+        x = self.activation(x)
+        if (bn < self.params.n) or (bn % self.params.n != 0):
+            w = f'Expected the size of x at dim 0 to be a non-zero multiple of {self.params.n} but got {bn}. Returning x as is.'
+            warnings.warn(w)
+        else:
+            x = rearrange(x, '(b n) c -> b n c', n=self.params.n)
+        x = x.mean(1)
+        return x
+    
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        loss = nn.functional.cross_entropy(logits, y)
+        output = (loss,)
+        if return_logits:
+            output = (logits,) + output
+        return output
