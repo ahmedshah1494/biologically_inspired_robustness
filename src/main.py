@@ -50,6 +50,7 @@ if __name__ == '__main__':
     parser.add_argument('--ckp', type=str)
     parser.add_argument('--num_test', type=int, default=2000)
     parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--num_trainings', type=int, default=1)
     parser.add_argument('--eval_only', action='store_true')
     parser.add_argument('--prune_and_test', action='store_true')
     parser.add_argument('--run_adv_attack_battery', action='store_true')
@@ -58,6 +59,10 @@ if __name__ == '__main__':
     parser.add_argument('--run_randomized_smoothing_eval', action='store_true')
     parser.add_argument('--output_to_task_logdir', action='store_true')
     parser.add_argument('--center_fixation', action='store_true')
+    parser.add_argument('--five_fixations', action='store_true')
+    parser.add_argument('--disable_retina', action='store_true')
+    parser.add_argument('--add_fixed_noise_patch', action='store_true')
+    parser.add_argument('--view_scale', type=int, default=None)
     parser.add_argument('--use_lightning_lite', action='store_true')
     parser.add_argument('--use_bf16_precision', action='store_true')
     parser.add_argument('--use_f16_precision', action='store_true')
@@ -65,6 +70,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     print(args)
+
+    if args.run_randomized_smoothing_eval or args.run_adv_attack_battery:
+        args.eval_only = True
 
     # s = time()
     # np.random.seed(s)
@@ -78,15 +86,29 @@ if __name__ == '__main__':
     if args.run_adv_attack_battery:
         task = eval.get_adversarial_battery_task(task_cls, args.num_test, args.batch_size, 
                                                    {k:v for k,v in attacks.items() if k in args.attacks},
-                                                    args.eps_list, center_fixation=args.center_fixation
+                                                    args.eps_list, center_fixation=args.center_fixation,
+                                                    five_fixation_ensemble=args.five_fixations, 
+                                                    view_scale=args.view_scale, disable_retina=args.disable_retina,
+                                                    add_fixed_noise_patch=args.add_fixed_noise_patch
                                                     )()
         runner_cls = AdversarialAttackBatteryRunner
         runner_kwargs = {
             'output_to_ckp_dir': (not args.output_to_task_logdir)
         }
     elif args.run_randomized_smoothing_eval:
-        task = eval.get_randomized_smoothing_task(task_cls, 512, [0.125], 128, rs_batch_size=1024*10)()
+        task = eval.get_randomized_smoothing_task(task_cls, args.num_test, args.eps_list, args.batch_size, rs_batch_size=args.batch_size,
+                                                    center_fixation=args.center_fixation, five_fixation_ensemble=args.five_fixations)()
         runner_cls = RandomizedSmoothingRunner
+        if args.use_lightning_lite:
+            runner_kwargs = {
+                'wrap_trainer_with_lightning': True,
+                'lightning_kwargs': {
+                    'strategy': "ddp",
+                    'devices': 'auto',
+                    'accelerator': "gpu",
+                    'precision': "bf16"
+                }
+            }
     else:
         runner_cls = AdversarialExperimentRunner
         if args.use_lightning_lite:
@@ -110,7 +132,7 @@ if __name__ == '__main__':
                 'lightning_kwargs': {
                     'precision': precision,
                     # 'profiler': 'simple',
-                    'fast_dev_run': args.debug
+                    'fast_dev_run': args.debug,
                 }
             }
     if args.ckp is not None:
@@ -121,7 +143,7 @@ if __name__ == '__main__':
     else:
         ckp_pths = [None]
     for ckp_pth in ckp_pths:
-        runner = runner_cls(task, ckp_pth=ckp_pth, load_model_from_ckp=(ckp_pth is not None), **runner_kwargs)
+        runner = runner_cls(task, num_trainings=args.num_trainings, ckp_pth=ckp_pth, load_model_from_ckp=(ckp_pth is not None), **runner_kwargs)
         if args.eval_only:
             runner.create_trainer()
             runner.test()
