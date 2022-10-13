@@ -163,5 +163,5 @@ class EcosetAdvTrainCyclicLRRandAugmentXResNet2x18(AbstractTask):
             # OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=1839, pct_start=0.05, anneal_strategy='linear'),
             # OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=5632, pct_start=0.1, anneal_strategy='linear'),
             OneCycleLRConfig(max_lr=0.2, epochs=nepochs, steps_per_epoch=5632, pct_start=0.2, anneal_strategy='linear'),
-            logdir=LOGDIR, batch_size=128
+            logdir=LOGDIR, batch_size=64
         )
