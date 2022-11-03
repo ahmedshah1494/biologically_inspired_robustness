@@ -1,4 +1,5 @@
 import time
+from turtle import forward
 from typing import Callable, List, Type, Union
 import warnings
 from attrs import define, field
@@ -276,8 +277,101 @@ class ConsistencyOptimizationMixin(object):
             i += 1
             prev_loss = loss
 
-class IdentityLayer(AbstractModel):
+class LinearLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        common_params: CommonModelParams = field(factory=CommonModelParams)
+    
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.params = params
+        self._make_network()
+
+    def _make_network(self):
+        input_size = self.params.common_params.input_size
+        if np.iterable(input_size):
+            input_size = np.prod(input_size)
+        self.layer = nn.Linear(input_size, self.params.common_params.num_units, bias=self.params.common_params.bias)
+    
+    def forward(self, x, *args, **kwargs):
+        return self.layer(x)
+    
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        loss = torch.zeros((x.shape[0],), device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss    
+
+class FlattenLayer(AbstractModel):
+    def forward(self, x, *args, **kwargs):
+        return x.reshape(x.shape[0], -1)
+
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        loss = torch.zeros((x.shape[0],), device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+class NormalizationLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        mean: Union[float, List[float]] = [0.485, 0.456, 0.406]
+        std: Union[float, List[float]] = [0.229, 0.224, 0.225]
+
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        if isinstance(self.params.mean, list):
+            self.mean = nn.parameter.Parameter(torch.FloatTensor(self.params.mean).reshape(1,-1,1,1), requires_grad=False)
+        elif isinstance(self.params.mean, float):
+            self.mean = self.params.mean
+        if isinstance(self.params.std, list):
+            self.std = nn.parameter.Parameter(torch.FloatTensor(self.params.std).reshape(1,-1,1,1), requires_grad=False)
+        elif isinstance(self.params.std, float):
+            self.std = self.params.std
+    
+    def __repr__(self):
+        return f'NormalizationLayer(mean={self.params.mean}, std={self.params.std})'
+    
+    def forward(self, x, *args, **kwargs):
+        x = (x-self.mean)/self.std
+        return x
+    
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        loss = torch.zeros((logits.shape[0],), device=x.device)
+        return logits
+
+class RandomOcclusionLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        height_range: tuple = None
+        width_range: tuple = None
+        n_occlusions: int = 1
+    
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+    
     def forward(self, x):
+        for _ in range(self.params.n_occlusions):
+            i,j = np.random.randint(x.shape[2]-self.params.height_range[1]), np.random.randint(x.shape[3]-self.params.width_range[1])
+            h, w = np.random.randint(self.params.height_range[0],self.params.height_range[1]), np.random.randint(self.params.width_range[0],self.params.width_range[1])
+            x = torchvision.transforms.functional.erase(x, i, j, h, w, 0.)
+        return x
+
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        loss = torch.zeros((x.shape[0],), device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+class IdentityLayer(AbstractModel):
+    def forward(self, x, *args, **kwargs):
         return x
 
     def compute_loss(self, x, y, return_logits=True):
@@ -297,11 +391,31 @@ class ActivationLayer(AbstractModel):
         super().__init__(params)
         self.activation = self.params.activation_cls()
 
-    def forward(self, x):
+    def forward(self, x, *args, **kwargs):
         return self.activation(x)
 
     def compute_loss(self, x, y, return_logits=True):
-        logits = x
+        logits = self.forward(x)
+        loss = torch.zeros((x.shape[0],), device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+class DropoutLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        dropout_p: float = 0.
+    
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+        self.dropout = nn.Dropout(params.dropout_p)
+
+    def forward(self, x, *args, **kwargs):
+        return self.dropout(x)
+
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
         loss = torch.zeros((x.shape[0],), device=x.device)
         if return_logits:
             return logits, loss
@@ -906,12 +1020,15 @@ class GeneralClassifier(AbstractModel):
         self.feature_model = fe_params.cls(fe_params)
         input_size = self.params.input_size if self.params.input_size is not None else fe_params.common_params.input_size
         x = torch.rand(1,*(input_size))
+        print(x.shape)
         x = self.feature_model(x)
         if isinstance(x, tuple):
             x = x[0]
+            print(x.shape)
 
         cls_params = self.params.classifier_params
         if hasattr(cls_params, 'common_params'):
+            print(x.shape)
             cls_params.common_params.input_size = x.shape[1:]
         else:
             cls_params.input_size = x.shape[1:]
