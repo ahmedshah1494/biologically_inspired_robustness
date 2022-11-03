@@ -11,7 +11,10 @@ def gethostname():
 
 def aggregate_metrics(logdir, metrics_filename='metrics.json'):
     metric_dicts = []
-    for root, dirs, files in os.walk(logdir):
+    expt_dirs = [f'{logdir}/{d}' for d in os.listdir(logdir)]
+    for root in expt_dirs:
+        files = os.listdir(root)
+    # for root, dirs, files in os.walk(logdir):
         if metrics_filename in files:
             m = load_json(os.path.join(root, metrics_filename))
             metric_dicts.append(m)
@@ -82,17 +85,18 @@ def get_eps_from_logdict_key(s):
         eps = float(s)
         atkname = ''
     else:
-        atkname, eps = s.split('-')
+        atkname, eps = s.split('-', 1)
         eps = float(eps)
     return atkname, eps
 
-def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='metrics.json',
+def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='adv_metrics.json',
                 state_hist_filename='state_dict_hist.json', data_filename='data_and_preds.pkl',
                 adv_battery_data_filename='adv_data_and_preds.pkl', adv_metrics_filename='adv_metrics.json',
                 adv_succ_filename='adv_succ.json', args_filename='task.pkl', 
                 randomized_smoothing_metrics_filename='randomized_smoothing_metrics.json',
                 randomized_smoothing_data_filename='randomized_smoothing_preds_and_radii.pkl'):
-    print(logdir)
+    dataset = os.path.dirname(logdir)
+    print(dataset, logdir)
     metrics_path = os.path.join(logdir, metrics_filename)
     if os.path.exists(metrics_path):
         metrics = load_json(metrics_path)
@@ -116,11 +120,20 @@ def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='metric
     model_paths = []
     rs_metrics =[]
     lazy_rs_preds_and_radii = []
-    for root, _, files in os.walk(logdir):
-        model_files = [f for f in files if f.startswith('model') and f.endswith('.pt')]
-        if len(model_files) > 0:
-            model_fp = os.path.join(root, model_files[-1])
+    # for root, _, files in os.walk(logdir):
+    expt_dirs = [f'{logdir}/{d}' for d in os.listdir(logdir)]
+    for root in expt_dirs:
+        files = os.listdir(root)
+        if 'source' in root:
+            continue
+        # model_files = [f for f in files if f.startswith('model') and f.endswith('.pt')]
+        model_file_path = f'{root}/checkpoints/model_checkpoint.pt'
+        if os.path.exists(model_file_path):
+            model_fp = os.path.join(root, model_file_path)
             lazy_model_ckps.append(lazy_load_json(model_fp))
+        # if len(model_files) > 0:
+        #     model_fp = os.path.join(root, model_files[-1])
+        #     lazy_model_ckps.append(lazy_load_json(model_fp))
         # if state_hist_filename in files:
         #     sh_fp = os.path.join(root, state_hist_filename)
         #     lazy_state_hists.append(lazy_load_json(sh_fp))
@@ -162,7 +175,8 @@ def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='metric
         'adv_data_and_preds': lazy_adv_data_and_preds,
         'rs_metrics': rs_metrics,
         'rs_preds_and_radii': lazy_rs_preds_and_radii,
-        'args': args
+        'args': args,
+        'dataset': dataset
     }
     return log_dict
 
