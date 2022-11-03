@@ -19,7 +19,7 @@ if 'bridges2' in hostname:
 else:
     logdir_root = '/share/workhorse3/mshah1'
 
-LOGDIR = f'{logdir_root}/biologically_inspired_models/logs/'
+LOGDIR = f'{logdir_root}/biologically_inspired_models/icassp_logs/'
 
 def get_cifar10_params(num_train=25000, num_test=1000):
     p = ImageDatasetFactory.get_params()
@@ -145,6 +145,18 @@ def get_ecoset100shards_params(num_train=40, num_test=20, train_transforms=None,
 
 def get_imagenet_folder_params(num_train=1_271_000, num_test=50_000, train_transforms=None, test_transforms=None):
     return get_dataset_params(f'{logdir_root}/imagenet/', SupportedDatasets.IMAGENET_FOLDER, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_mnist_params(num_train=50000, num_test=10_000, train_transforms=None, test_transforms=None):
+    return get_dataset_params(logdir_root, SupportedDatasets.MNIST, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_fmnist_params(num_train=50000, num_test=10_000, train_transforms=None, test_transforms=None):
+    return get_dataset_params(logdir_root, SupportedDatasets.FMNIST, 
+                                num_train, num_test, train_transforms, test_transforms)
+
+def get_svhn_params(num_train=73257, num_test=26032, train_transforms=None, test_transforms=None):
+    return get_dataset_params(logdir_root, SupportedDatasets.SVHN, 
                                 num_train, num_test, train_transforms, test_transforms)
 
 def get_adv_experiment_params(trainer_cls: Type[AdversarialTrainer], training_params: TrainingParams, adv_params:AdversarialParams,
