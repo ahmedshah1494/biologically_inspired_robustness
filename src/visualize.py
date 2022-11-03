@@ -5,6 +5,7 @@ import itertools
 import json
 import os
 import pickle
+import re
 import time
 import matplotlib.pyplot as plt
 import scipy
@@ -19,7 +20,9 @@ from scipy.stats.mstats import f_oneway
 from matplotlib.animation import FuncAnimation
 import torch
 from tqdm import tqdm
-from adversarialML.biologically_inspired_models.src.utils import _compute_area_under_curve, load_logs, get_eps_from_logdict_key
+from adversarialML.biologically_inspired_models.src.utils import _compute_area_under_curve, load_logs, get_eps_from_logdict_key, write_pickle, load_pickle
+from adversarialML.biologically_inspired_models.src import models
+from torchvision.transforms.functional import erase
 
 def get_model_from_state_dict(state_dict, args, d, num_classes):
     model = get_model(args.model_config, d, num_classes)
@@ -201,6 +204,103 @@ def plot_train_v_test_accuracy_multimodel(logdicts, outdir):
     sns.relplot(x='test_eps', y='acc', hue='model_name', col='attack', data=df, kind='line')
     plt.savefig(os.path.join(outdir, 'test_acc_line.png'))
 
+def plot_test_accuracy_bar_multimodel(logdicts, outdir):
+    data = []
+    for model_name, logdict in logdicts.items():
+        test_acc = logdict['metrics']['test_accs']
+        # best_model_idx = np.argmax(test_acc[min(test_acc.keys())])
+        for eps, accs in test_acc.items():
+            atkname, eps = get_eps_from_logdict_key(eps)
+            # accs = [accs[best_model_idx]]
+            for a in accs:
+                r = {
+                    'model_name': model_name,
+                    'test_eps': float(eps),
+                    'acc': a,
+                    'attack': atkname
+                }
+                data.append(r)
+    df = pd.DataFrame(data)
+    hue_order = sorted(logdicts.keys(), key=lambda n: df[(df['test_eps'] == 0.) & (df['model_name'] == n)]['acc'].mean())
+    plt.figure(figsize=(30,10))
+    sns.set_style("whitegrid")
+    attacks = df['attack'].unique()
+    for i, atk in enumerate(attacks):
+        plt.subplot(1, len(attacks), i+1)
+        plt.title(f'attack={atk}')
+        plt.ylim(0, 1.)
+        sns.barplot(x='test_eps', y='acc', hue='model_name', hue_order=hue_order, data=df[df['attack'] == atk])
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar.png'))
+
+def plot_acc_v_hparams(logdicts, outdir, regex_dict={'depth':'(\d)+(?=L)', 'width_factor':'\d(?=xWide)', 'dropout_p':'\d\d(?=Dropout)', 'weight_decay':'\de_\d(?=WD)'}):
+    data = []
+    for model_name, logdict in logdicts.items():
+        hparams = {k: float(re.search(rgx, model_name).group().replace('_','-')) for k, rgx in regex_dict.items()}
+        hparams['dropout_p'] /= 10
+        test_acc = logdict['metrics']['test_accs']
+        # best_model_idx = np.argmax(test_acc[min(test_acc.keys())])
+        for eps, accs in test_acc.items():
+            atkname, eps = get_eps_from_logdict_key(eps)
+            for a in accs:
+                r = {
+                    'model_name': model_name,
+                    'test_eps': float(eps),
+                    'acc': a,
+                    'attack': atkname
+                }
+                r.update(hparams)
+                data.append(r)
+    df = pd.DataFrame(data)
+    plt.figure(figsize=(20,30))
+    test_eps = df['test_eps'].unique()
+    sns.set_style("whitegrid")
+    nrows = len(test_eps)
+    ncols = len(regex_dict)
+    for i, eps in enumerate(test_eps):
+        for j, hp in enumerate(regex_dict.keys()):
+            plt.subplot(nrows, ncols, i*ncols + j + 1)
+            if i == 0:
+                plt.title(f'eps={eps}')
+            sns.boxplot(x=hp, y='acc', data=df[df['test_eps'] == eps])
+    plt.savefig(os.path.join(outdir, 'test_acc_v_hp.png'))
+
+def plot_cw_norm_multimodel(logdicts, outdir):
+    data = []
+    for model_name, logdict in logdicts.items():
+        test_acc = logdict['metrics']['test_accs']
+        data_and_preds = logdict['adv_data_and_preds']
+        # best_model_idx = np.argmax(test_acc[min(test_acc.keys())])
+        for lz_model_dp in data_and_preds:
+            model_dp = lz_model_dp()
+            x = None
+            for atkstr in model_dp:
+                if 'CWL2' in atkstr:
+                    dp = model_dp[atkstr]
+                    atkname, eps = get_eps_from_logdict_key(atkstr)
+                    if eps == 0.:
+                        x = dp['X']
+                    else:
+                        xadv = dp['X']
+                        norm = np.linalg.norm((x - xadv).reshape(x.shape[0], -1), axis=1)
+                        # print(x.shape, xadv.shape, atkstr, norm)
+                        for n in norm:
+                            r = {
+                                'model_name': model_name,
+                                'confidence': float(eps),
+                                'attack': atkname,
+                                'L2-norm': n,
+                            }
+                            data.append(r)
+    df = pd.DataFrame(data)
+    sns.set_style("whitegrid")
+    attacks = df['attack'].unique()
+    plt.figure(figsize=(10, 8))
+    g = sns.barplot(x='confidence', y='L2-norm', hue='model_name', data=df)
+    g.legend(loc='upper center', bbox_to_anchor=(0.5, 1.5), ncol=1)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_cw_norm.png'))
+
 def plot_test_accuracy_auc_multimodel(logdicts, outdir, plot_confint=False):
     data = []
     for model_name, logdict in logdicts.items():
@@ -242,21 +342,65 @@ def plot_test_accuracy_auc_bar_multimodel(logdicts, outdir):
 def plot_test_accuracy_auc_box_multimodel(logdicts, outdir):
     return plot_test_accuracy_auc_multimodel(logdicts, outdir, plot_confint=False)
 
-def plot_certified_accuracy(logdicts, outdir):
+def plot_certified_accuracy(logdict, outdir):
+    radius_step = 0.01
+    data = []
+    for model_data in logdict['rs_preds_and_radii']:
+        model_data = model_data()
+        y = np.array(model_data['Y'])
+        pnr_for_sigma = model_data['preds_and_radii']
+        for sigma, pnr in pnr_for_sigma.items():
+            if sigma > 0.125:
+                continue
+            preds = np.array(pnr['Y_pred'])
+            radii = np.array(pnr['radii'])
+
+            correct = (preds == y)
+            # unique_radii = np.unique(radii)
+            # if unique_radii[0] > 0:
+            #     unique_radii = np.insert(unique_radii, 0, 0.)
+            unique_radii = np.arange(0, radii.max() + radius_step, radius_step)
+            
+            acc_at_radius = [(correct & (radii >= r)).mean() for r in unique_radii]
+
+            for rad, acc in zip(unique_radii, acc_at_radius):
+                r = {
+                    'sigma': sigma,
+                    'radius': rad,
+                    'accuracy': acc
+                }
+                data.append(r)
+    df = pd.DataFrame(data)
+    plt.figure()
+    sns.set_style("whitegrid")
+    sns.relplot(x='radius', y='accuracy', col='sigma', data=df, kind='line')
+    plt.savefig(os.path.join(outdir, 'rs_certified_acc_line.png'))
+
+def plot_certified_accuracy_multimodel(logdicts, outdir):
     radius_step = 0.01
     data = []
     for model_name, logdict in logdicts.items():
         for model_data in logdict['rs_preds_and_radii']:
             model_data = model_data()
-            y = np.array(model_data['Y'])
+            y = np.array(model_data['Y'])[:100]
             pnr_for_sigma = model_data['preds_and_radii']
             for sigma, pnr in pnr_for_sigma.items():
-                if sigma > 0.125:
+                if isinstance(sigma, str):
+                    exp_name, s = get_eps_from_logdict_key(sigma)
+                    if len(exp_name) > 0:
+                        exp_name = '-'+exp_name
+                else:
                     continue
-                preds = np.array(pnr['Y_pred'])
-                radii = np.array(pnr['radii'])
-
-                correct = (preds == y)
+                    # s = sigma
+                    # exp_name = ''
+                # if s > 0.125:
+                #     continue
+                if 'Y' in pnr:
+                    y = np.array(pnr['Y'])
+                preds = np.array(pnr['Y_pred'])[:100]
+                radii = np.array(pnr['radii'])[:100]
+                print(model_name, sigma, preds.shape, radii.shape, y.shape)
+                correct = (preds == y[: len(preds)])
                 # unique_radii = np.unique(radii)
                 # if unique_radii[0] > 0:
                 #     unique_radii = np.insert(unique_radii, 0, 0.)
@@ -266,8 +410,8 @@ def plot_certified_accuracy(logdicts, outdir):
 
                 for rad, acc in zip(unique_radii, acc_at_radius):
                     r = {
-                        'sigma': sigma,
-                        'model_name': model_name,
+                        'sigma': s,
+                        'model_name': f'{model_name}{exp_name}',
                         'radius': rad,
                         'accuracy': acc
                     }
@@ -300,6 +444,314 @@ def plot_test_sparsity_multimodel(logdicts, outdir):
     plt.tight_layout()
     plt.grid()
     plt.savefig(os.path.join(outdir, f'test_sparsity_auc_{plt_type}.png'))
+
+def get_reconstruction(model: torch.nn.Module, x, niters=10000, lr=1.):
+    orig_act = model(x).detach()
+    print(orig_act.shape)
+    orig_x = x
+
+    x = torch.empty_like(orig_x).uniform_(0.45,0.55)
+    x = x.requires_grad_(True)
+    optimizer = torch.optim.SGD([x], lr=lr, momentum=0.9, nesterov=True)
+    for i in range(niters):
+        act = model(x)
+        # loss = 0.5*((act - orig_act)**2).sum() / x.shape[0]
+        loss = torch.div(torch.norm(act - orig_act, dim=1), torch.norm(orig_act, dim=1)).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        if (i % 1000) == 0:
+            print(i, float(loss), float(torch.norm(x.grad, p=2, dim=1).mean()))
+    return x
+
+def get_reconstruction2(model: torch.nn.Module, x, niters=20000):
+    model = model.requires_grad_(False)
+    orig_act = model(x).detach()
+    orig_x = x
+    back_layer = torch.nn.Linear(orig_act.shape[1], x.shape[1]).to(x.device)
+    print(back_layer)
+    # x = torch.empty_like(orig_x).zero_()#uniform_(0.45,0.55)
+    # x = x.requires_grad_(True)
+    # optimizer = torch.optim.SGD([x], lr=1., momentum=0.9, nesterov=True)
+    optimizer = torch.optim.SGD(back_layer.parameters(), lr=1., momentum=0.9, nesterov=True)
+    for i in range(niters):
+        # act = model(x)
+        recon = back_layer(model(x))
+        loss = 0.5*((recon - x)**2).sum() / x.shape[0]
+        # loss = 0.5*((act - orig_act)**2).sum() / x.shape[0]
+        # loss = torch.div(torch.norm(act - orig_act, dim=1), torch.norm(orig_act, dim=1)).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        if (i % 1000) == 0:
+            print(i, float(loss))#, float(torch.norm(x.grad, p=2, dim=1).mean()))
+    return recon
+
+def plot_reconstruction(logdict, outdir, outfile_prefix='', transform=None):
+    test_acc = logdict['metrics']['test_accs']
+    data_and_preds = logdict['adv_data_and_preds']
+    print(list(data_and_preds[0]().keys()))
+    model_paths = logdict['model_paths']
+    num_plots_per_eps = 10
+    print(test_acc.keys())
+    for i,(test_eps, accs) in enumerate(sorted(test_acc.items(), key=lambda x:x[0])):
+        atkname, eps = get_eps_from_logdict_key(test_eps)
+        if eps > 0:
+            continue
+        best_model_idx = np.argmax(accs)
+        model_data_and_preds = data_and_preds[best_model_idx]()[test_eps]
+        model_clean_data_and_preds = data_and_preds[best_model_idx]()[min(test_acc.keys())]
+        model_path = model_paths[best_model_idx]
+        model: torch.nn.Module = torch.load(f'{model_path}/checkpoints/model_checkpoint.pt').cuda()
+        model = model.requires_grad_(False)
+        model = model.feature_model
+        for m in model.modules():
+            if isinstance(m, models.ConsistentActivationLayer):
+                ca_layer = m 
+                model = torch.nn.Sequential(model, ca_layer.activation)
+                # model_ = model
+                # model = lambda x: ca_layer.activation(model_(x, return_state_hist=True)[1][0][0])
+                break
+
+        y = np.array(model_data_and_preds['Y'])
+        y_pred = np.array(model_data_and_preds['Y_pred'])
+        y_clean_pred = np.array(model_clean_data_and_preds['Y_pred'])
+        x = np.array(model_data_and_preds['X'])
+        x_clean = np.array(model_clean_data_and_preds['X'])
+
+        if 'selected_idx' not in locals():
+            selected_idx = np.random.choice(len(x), num_plots_per_eps, replace=False)
+        selected_x = x[selected_idx]
+        selected_y = y[selected_idx]
+        selected_pred = y_pred[selected_idx]
+        
+        selected_x = torch.FloatTensor(selected_x).cuda()
+        if transform is not None:
+            selected_x = transform(selected_x)
+        # state_hist = ca_layer.activation(model(selected_x, return_state_hist=True)[1][0])
+        # state_hist = state_hist[:, [0] + list(range(1, state_hist.shape[1], (state_hist.shape[1]-1)//4))]
+        # reconstructions = ca_layer.back(state_hist).cpu().detach().numpy()
+        if 'ca_layer' in locals():
+            T = ca_layer.max_test_time_steps
+            reconstructions = []
+            for t in ([1, 4, 8, -1]):
+                ca_layer.max_test_time_steps = t
+                reconstructions.append(get_reconstruction(model, selected_x, 2500))
+            reconstructions = torch.stack(reconstructions, 1)
+        else:
+            reconstructions = get_reconstruction(model, selected_x, 20_000, lr=0.8)
+        if reconstructions.dim() == 2:
+            reconstructions = reconstructions.unsqueeze(1)
+        reconstructions = reconstructions.cpu().detach().numpy()
+        reconstructions = reconstructions.reshape(reconstructions.shape[0], reconstructions.shape[1], *(x.shape[1:]))
+        selected_x = selected_x.cpu().detach().numpy()
+        print(reconstructions.shape)
+
+        plt.figure(figsize=(18, 25))
+        nrows = num_plots_per_eps
+        ncols = reconstructions.shape[1]+1
+        j = 1
+        def plot_image(img, j):
+            plt.subplot(nrows, ncols, j)
+            img = np.transpose(img, (1,2,0))
+            # if img.shape[2] == 1:
+            #     img = np.repeat(img, 3, 2)
+            plt.imshow(img)
+
+        for y, p, orig, recon in zip(selected_y, selected_pred, selected_x, reconstructions):
+            plot_image(orig, j)
+            plt.title(f'L={y} P={p}')
+            j += 1
+            for rt in recon:
+                plot_image(rt, j)
+                j += 1
+        plt.tight_layout()
+        plt.savefig(os.path.join(outdir, f'{outfile_prefix}recon_{test_eps}.png'))
+
+def plot_noisy_reconstruction(logdict, outdir):
+    add_noise = lambda x: x + torch.empty_like(x).normal_(std=.5)
+    plot_reconstruction(logdict, outdir, 'gnoise1', transform=add_noise)
+
+def plot_occluded_reconstruction(logdict, outdir):
+    def occlude(x):
+        for _ in range(5):
+            i,j = np.random.randint(x.shape[2]-1), np.random.randint(x.shape[3]-1)
+            h, w = np.random.randint(1,x.shape[2]-i), np.random.randint(1,x.shape[3]-j)
+            x = erase(x, i, j, h, w, 0.)
+        return x
+    plot_reconstruction(logdict, outdir, 'occluded_', transform=occlude)
+
+def plot_activations_over_time(logdict, outdir, outfile_prefix='', transform=None):
+    test_acc = logdict['metrics']['test_accs']
+    data_and_preds = logdict['adv_data_and_preds']
+    print(list(data_and_preds[0]().keys()))
+    model_paths = logdict['model_paths']
+    num_samples = 500
+    steps = [1, 4, 8, 16]
+    print(test_acc.keys())
+    acc_data = []
+    for i,(test_eps, accs) in enumerate(sorted(test_acc.items(), key=lambda x:x[0])):
+        atkname, eps = get_eps_from_logdict_key(test_eps)
+        if (atkname != 'APGD') and (eps not in [0, 0.05]):
+            continue
+        best_model_idx = np.argmax(accs)
+        model_data_and_preds = data_and_preds[best_model_idx]()[test_eps]
+        model_clean_data_and_preds = data_and_preds[best_model_idx]()[min(test_acc.keys())]
+        model_path = model_paths[best_model_idx]
+        model: torch.nn.Module = torch.load(f'{model_path}/checkpoints/model_checkpoint.pt').cuda()
+        model = model.requires_grad_(False)
+        for m in model.modules():
+            if isinstance(m, models.ConsistentActivationLayer):
+                ca_layer = m
+                break
+
+        y = np.array(model_data_and_preds['Y'])
+        y_pred = np.array(model_data_and_preds['Y_pred'])
+        y_clean_pred = np.array(model_clean_data_and_preds['Y_pred'])
+        x = np.array(model_data_and_preds['X'])
+        x_clean = np.array(model_clean_data_and_preds['X'])
+
+        if 'selected_idx' not in locals():
+            selected_idx = np.random.choice(len(x), num_samples, replace=False)
+        selected_x = x[selected_idx]
+        selected_y = y[selected_idx]
+        selected_pred = y_pred[selected_idx]
+        
+        selected_x = torch.FloatTensor(selected_x).cuda()
+        if transform is not None:
+            selected_x = transform(selected_x)
+        if 'ca_layer' in locals():
+            state_hist = ca_layer.activation(model(selected_x, return_state_hist=True)[1][0])
+            state_hist = state_hist[:, steps]
+        else:
+            state_hist = model.feature_model(selected_x).unsqueeze(1)
+        logits = model.classifier(state_hist).cpu().detach().numpy()
+        state_hist = state_hist.cpu().detach().numpy()
+
+        preds = np.argmax(logits, axis=-1)
+        acc = (np.expand_dims(selected_y, 1) == preds).astype(float).mean(0)
+        for s, a in zip(steps, accs):
+            r = {'step':s, 'accuracy': a, 'perturbation size': eps}
+            acc_data.append(r)
+
+        pca = PCA(2)
+        pca_act = pca.fit_transform(state_hist.reshape(-1, state_hist.shape[-1]))
+        pca_act = pca_act.reshape(*(state_hist.shape[:-1]), -1)
+        act_data = []
+        for y, act in zip(selected_y, pca_act):
+            for s,a in zip(steps, act):
+                r = {
+                    'x0': a[0],
+                    'x1': a[1],
+                    'y': y,
+                    'step':s,
+                }
+                act_data.append(r)
+        act_df = pd.DataFrame(act_data)
+        ncols = pca_act.shape[1]
+        plt.figure(figsize=(4*ncols, 4))
+        for j,s in enumerate(steps):
+            plt.subplot(1, ncols, j+1)
+            sns.scatterplot(x='x0', y='x1', hue='y', palette='pastel', data=act_df[act_df['step'] == s])
+        plt.tight_layout()
+        plt.savefig(os.path.join(outdir, f'act_scatter_{test_eps}.png'))
+    
+    acc_df = pd.DataFrame(acc_data)
+    plt.figure()
+    sns.lineplot(x='step', y='accuracy', hue='perturbation size', data=acc_df)
+    plt.savefig(os.path.join(outdir, 'acc_over_time.png'))
+
+def compute_corrcoef(act):
+    cov = np.cov(act, rowvar=False)
+    var = np.diag(cov)
+    var_mat = var.reshape(-1,1).dot(var.reshape(1,-1))
+    var_mat[var_mat == 0] = 1e-8
+    corr = cov / np.sqrt(var_mat)
+    return corr
+
+def plot_activations_correlations(logdicts, outdir):
+    num_samples = 1000
+    model_idx = 0
+    neuron_idx = 0
+    acts = {}
+    corrs = {}
+
+    if not os.path.exists(os.path.join(outdir, 'acts.pkl')):
+        for model_name, logdict in logdicts.items():
+            test_acc = logdict['metrics']['test_accs']
+            data_and_preds = logdict['adv_data_and_preds']
+            model_paths = logdict['model_paths']
+            model: torch.nn.Module = torch.load(f'{model_paths[model_idx]}/checkpoints/model_checkpoint.pt').cuda()
+            for i,(test_eps, accs) in enumerate(sorted(test_acc.items(), key=lambda x:x[0])):
+                print(test_eps)
+                atkname, eps = get_eps_from_logdict_key(test_eps)
+                if 'APGD' not in atkname:
+                    continue
+                model_idx = np.argmax(accs)
+                model_data_and_preds = data_and_preds[model_idx]()[test_eps]    
+
+                x = np.array(model_data_and_preds['X'])
+
+                if 'selected_idx' not in locals():
+                    selected_idx = np.random.choice(len(x), num_samples, replace=False)
+                selected_x = x[selected_idx]
+                act = model.feature_model(torch.FloatTensor(selected_x).cuda()).cpu().detach().numpy()
+                acts.setdefault(model_name, {})[eps] = act
+
+        write_pickle(acts, os.path.join(outdir, 'acts.pkl'))
+    else:
+        acts = load_pickle(os.path.join(outdir, 'acts.pkl'))
+
+    corrs = {}
+    for model_name,  eps2act in acts.items():
+        corrs[model_name] = {eps: compute_corrcoef(act) for eps, act in eps2act.items()}
+        
+    all_neuron_corr_data = []
+    for model_name in corrs:
+        clean_corr = corrs[model_name][0.]
+        clean_corr_nz = np.diag(clean_corr) != 0
+        for eps, corr in corrs[model_name].items():
+            # diff = np.abs(clean_corr - corr / (clean_corr + 1e-8)).flatten()
+            corr_nz = (np.diag(corr) != 0) & clean_corr_nz
+            print(clean_corr_nz.astype(int).sum(), corr_nz.astype(int).sum())
+            diff = np.abs(clean_corr[corr_nz] - corr[corr_nz]).flatten()
+            print(eps, diff.min(), np.median(diff), diff.max())
+            for d in diff:
+                r = {
+                    'Model': model_name,
+                    'Perturbation Size': eps,
+                    'Post-Perturbation Change in ρ': d
+                }
+                all_neuron_corr_data.append(r)
+    df = pd.DataFrame(all_neuron_corr_data)
+    df = df[(df['Perturbation Size'] == 0.1)]
+    plt.figure(figsize=(5,4))
+    with sns.plotting_context("paper", font_scale=2, rc={'lines.linewidth': 2}):
+        sns.set_style("whitegrid")
+        sns.displot(x='Post-Perturbation Change in ρ', hue='Model', data=df, kind='ecdf', legend=False, aspect=5/4, height=4)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, f'corr_change_ecdf.png'))
+            
+
+    corr_mat_diff_data = []
+    for model_name in corrs:
+        clean_corr = corrs[model_name][0.]
+        for eps, corr in corrs[model_name].items():
+            dnorm = np.linalg.norm(clean_corr - corr, ord='fro') #/ np.linalg.norm(clean_corr, ord='fro')
+            r = {
+                'Model': model_name,
+                'Perturbation Size': eps,
+                'Post-Perturbation\nChange in R ($∥.∥_F$)': dnorm
+            }
+            corr_mat_diff_data.append(r)
+    df = pd.DataFrame(corr_mat_diff_data)
+    plt.figure(figsize=(5,4))
+    with sns.plotting_context("paper", font_scale=2, rc={'lines.linewidth': 2}):
+        sns.set_style("whitegrid")
+        sns.lineplot(x='Perturbation Size', y='Post-Perturbation\nChange in R ($∥.∥_F$)', hue='Model', data=df)
+    # plt.xticks([0., 2.5e-4, 5e-4, 1e-3], ['0.0', '2.5e-4', '5e-4', '1e-3'])
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, f'corr_change_norm.png'))
 
 def plot_adv_img_and_logits(logdict, outdir):
     test_acc = logdict['metrics']['test_accs']
@@ -465,22 +917,31 @@ def plot_state_hists(logdict, outdir, projection='pca'):
     plt.savefig(os.path.join(outdir, f'state_hist_{projection}.png'))
 def plot_confmat(logdict, outdir):
     test_acc = logdict['metrics']['test_accs']
-    test_acc = {float(k):v for k,v in test_acc.items()}
-    best_model_idx = get_best_model_idx(test_acc)
-    model_data_and_preds = logdict['data_and_preds'][best_model_idx]()
-    plt.figure(figsize=(25,4))
+    
+    # best_model_idx = 0#get_best_model_idx(test_acc)
+    # model_data_and_preds = logdict['data_and_preds'][best_model_idx]()
+    eps2confmat = {}
+    for i, model_data_and_preds in enumerate(logdict['adv_data_and_preds']):
+        model_data_and_preds = model_data_and_preds()
+        for eps, dp in model_data_and_preds.items():
+            atkname, eps = get_eps_from_logdict_key(eps)
+            preds = dp['Y_pred']
+            labels = dp['Y']
+            classes = np.unique(labels)
+            confmat = np.zeros((len(classes), len(classes)))
+            for (p, l) in zip(preds, labels):
+                confmat[l, p] += 1
+            eps2confmat[eps] = eps2confmat.get(eps, 0) + confmat
     nrows = 1
-    ncols = len(test_acc)
-    for i,(test_eps, accs) in enumerate(test_acc.items()):
-        preds = model_data_and_preds[test_eps]['Y_pred']
-        labels = model_data_and_preds[test_eps]['Y']
-        classes = np.unique(labels)
-        confmat = np.zeros((len(classes), len(classes)))
-        for (p, l) in zip(preds, labels):
-            confmat[l, p] += 1
+    ncols = len(eps2confmat)
+    plt.figure(figsize=(4*ncols, 4))
+    for i, (eps, confmat) in enumerate(eps2confmat.items()):
+        acc = np.diag(confmat).sum() / confmat.sum()
+        confmat = confmat / (confmat.sum(1, keepdims=True))
+        print(sorted(enumerate(np.diag(confmat)), key=lambda x: x[1]))
         plt.subplot(nrows, ncols, i+1)
-        plt.title(f'acc_{test_eps}={accs[best_model_idx]:.3f}')
-        sns.heatmap(confmat, annot=True, fmt='.1f', cbar=False, center=0.)
+        plt.title(f'acc_{eps}={acc:.3f}')
+        sns.heatmap(confmat, annot=False, fmt='.1f', cbar=True)
         plt.xlabel("Prediction")
         plt.ylabel("Label")
     plt.tight_layout()
