@@ -96,6 +96,11 @@ class AdversarialTrainer(_Trainer, PruningMixin):
                 x = rearrange(x, 'b n c h w -> (b n) c h w')
                 x = adv_attack(x, y_)
                 x = rearrange(x, '(b n) c h w -> b n c h w', b = len(y))
+            elif x.dim() < 4:
+                x_shape = tuple(x.shape)
+                for _ in range(4-x.dim()):
+                    x = x.unsqueeze(1)
+                x = adv_attack(x, y)
             else:
                 x = adv_attack(x, y)
         return x,y
@@ -241,12 +246,8 @@ class ConsistentActivationModelAdversarialTrainer(AdversarialTrainer):
         training_params: Type[TrainingParams] = field(factory=TrainingParams)
         adversarial_params: Type[AdversarialParams] = field(factory=AdversarialParams)
         act_opt_params: ActivityOptimizationParams = field(factory=ActivityOptimizationParams)
-    
-    @classmethod
-    def get_params(cls):
-        return cls.ConsistentActivationModelAdversarialTrainerParams(cls)
 
-    def __init__(self, params: ConsistentActivationModelAdversarialTrainerParams, *args, **kwargs):
+    def __init__(self, params: TrainerParams, *args, **kwargs):
         super().__init__(params, *args, **kwargs)
         self.params = params
         self._load_max_act_opt_lrs()
@@ -350,10 +351,11 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
                 eps = atk.attack.confidence
             elif isinstance(atk, FoolboxAttackWrapper):
                 eps = atk.run_kwargs.get('epsilons', [float('inf')])[0]
-            elif isinstance(atk, torchattacks.attack.Attack):
-                eps = atk.eps
+            # elif isinstance(atk, torchattacks.attack.Attack):
             else:
-                raise NotImplementedError(f'{type(atk)} is not supported')
+                eps = atk.eps
+            # else:
+            #     raise NotImplementedError(f'{type(atk)} is not supported')
             atk_name = f"{atk.__class__.__name__ if name is None else name}-{eps}"
 
             clean_x = batch[0]
@@ -378,7 +380,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             test_acc[atk_name] = acc
             test_logits[atk_name] = logits.numpy()
             target_labels[atk_name] = y_tgt.detach().cpu().numpy().tolist()
-            self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
+            # self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
         return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels, 'logits': test_logits}, metrics
     
