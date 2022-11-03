@@ -2,9 +2,10 @@ from copy import deepcopy
 import os
 from time import time
 from attrs import define, asdict
-from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, SupportedBackend
+from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, SupportedBackend, AbstractAttackConfig
 from mllib.runners.configs import BaseExperimentConfig
 import torch
+import torchvision
 
 from trainers import RandomizedSmoothingEvaluationTrainer, MultiAttackEvaluationTrainer
 from mllib.datasets.dataset_factory import ImageDatasetFactory, SupportedDatasets
@@ -112,6 +113,70 @@ def get_cwl2_atk(conf):
     atk_p.steps = 100
     atk_p.run_params.epsilons = [1000.]
     return atk_p
+
+
+class GaussianNoiseAttack(torch.nn.Module):
+    def __init__(self, model, std) -> None:
+        super().__init__()
+        self.eps = self.std = std
+    
+    def forward(self, img, *args, **kwargs):
+        d = torch.empty_like(img).normal_(0, self.std)
+        return torch.clamp(img + d, 0, 1)
+@define(slots=False)
+class GaussianNoiseAttackConfig(AbstractAttackConfig):
+    _cls = GaussianNoiseAttack
+    std: float = 1.
+
+def get_gnoise_params(eps):
+    p = GaussianNoiseAttackConfig(eps)
+    return p
+
+class UniformNoiseAttack(torch.nn.Module):
+    def __init__(self, model, eps) -> None:
+        super().__init__()
+        self.eps = eps
+    
+    def forward(self, img, *args, **kwargs):
+        d = torch.empty_like(img).uniform_(-self.eps, self.eps)
+        return torch.clamp(img + d, 0, 1)
+
+@define(slots=False)
+class UniformNoiseAttackConfig(AbstractAttackConfig):
+    _cls = UniformNoiseAttack
+    eps: float = 1.
+
+def get_unoise_params(eps):
+    p = UniformNoiseAttackConfig(eps)
+    return p
+
+class RandomOcclusionAttack(torch.nn.Module):    
+    def __init__(self, model, pcent) -> None:
+        super().__init__()
+        self.eps = self.pcent = pcent
+    
+    def forward(self, x, *args, **kwargs):
+        img_area = np.prod(x.shape[2:])
+        occ_area = self.pcent * img_area
+        h_min = int(np.ceil(occ_area/x.shape[3]))
+        w_min = int(np.ceil(occ_area/x.shape[2]))
+        h_max = occ_area // w_min
+        w_max = occ_area // h_min
+
+        i,j = np.random.randint(x.shape[2]-h_min+1), np.random.randint(x.shape[3]-w_min+1)
+        h = np.random.randint(h_min, min(h_max, x.shape[2]-i)+1)
+        w = int(occ_area // h)
+        x = torchvision.transforms.functional.erase(x, i, j, h, w, 0.)
+        return x
+
+@define(slots=False)
+class RandomOcclusionAttackConfig(AbstractAttackConfig):
+    _cls = RandomOcclusionAttack
+    pcent: float = 0.5
+
+def get_randOcc_params(eps):
+    p = RandomOcclusionAttackConfig(eps)
+    return p
 
 def get_adv_attack_params(atk_types):
     atktype_to_paramfn = {

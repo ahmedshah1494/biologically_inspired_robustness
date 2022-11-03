@@ -30,6 +30,9 @@ attacks =  {
             'APGDL2': eval.get_apgd_l2_atk, 
             'APGDL2_EOT20': eval.get_eot20_apgd_l2_atk,
             'APGDL2_EOT50': eval.get_eot50_apgd_l2_atk,
+            'GNoise': eval.get_gnoise_params,
+            'UNoise': eval.get_unoise_params,
+            'RandOcc': eval.get_randOcc_params,
             # 'APGD_Transfer_MM8L':eval.get_transfered_atk(
             # '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
             # 'Cifar10AutoAugmentMLPMixer8LTask-50K/4/'
@@ -48,7 +51,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--task', type=str, required=True)
     parser.add_argument('--ckp', type=str)
-    parser.add_argument('--num_test', type=int, default=2000)
+    parser.add_argument('--num_test', type=int, default=10000)
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--num_trainings', type=int, default=1)
     parser.add_argument('--eval_only', action='store_true')
