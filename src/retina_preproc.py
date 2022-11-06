@@ -151,8 +151,16 @@ class GreyscaleLayer(AbstractModel):
         clr_wt: float = 0
     
     def forward(self, x: torch.Tensor):
-        gx = torch.repeat_interleave(x.mean(1, keepdim=True), x.shape[1], 1)
-        return (self.params.clr_wt) * x + (1 - self.params.clr_wt) * gx
+        return x.mean(1, keepdim=True)
+
+    def compute_loss(self, x, y, return_logits=True):
+        out = self.forward(x)
+        logits = out
+        loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
 
 class GaussianNoiseLayer(AbstractModel):
     @define(slots=False)

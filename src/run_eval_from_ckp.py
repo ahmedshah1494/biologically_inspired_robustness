@@ -1,7 +1,7 @@
 from argparse import ArgumentParser
 import os
 
-_LOGDIR = '/share/workhorse3/mshah1/biologically_inspired_models/logs'
+_LOGDIR = '/share/workhorse3/mshah1/biologically_inspired_models/icassp_logs'
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -22,7 +22,7 @@ if __name__ == '__main__':
         args.exp_name = '-'+args.exp_name
 
     for i in range(args.ckp_start, args.ckp_end+1):
-        cmd = f'CUDA_VISIBLE_DEVICES={args.gpu_idx} python main.py --task {args.task} --ckp {_LOGDIR}/{args.dataset}/{args.task.split(".")[1]}{args.exp_name}/{i}/checkpoints/model_checkpoint.pt --eval_only --run_adv_attack_battery --attacks {" ".join(args.attacks)} --eps_list {" ".join(args.eps_list)}'
+        cmd = f'CUDA_VISIBLE_DEVICES={args.gpu_idx} python main.py --task {args.task} --ckp {_LOGDIR}/{args.dataset}/{args.task.split(".")[-1]}{args.exp_name}/{i}/checkpoints/model_checkpoint.pt --eval_only --run_adv_attack_battery --attacks {" ".join(args.attacks)} --eps_list {" ".join(args.eps_list)} --num_test 10000'
         for k,v in vars(args).items():
             if isinstance(v, bool) and v:
                 cmd += f' --{k}'
