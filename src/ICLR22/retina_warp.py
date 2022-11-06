@@ -17,6 +17,7 @@ from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
 from adversarialML.biologically_inspired_models.src.task_utils import *
+from adversarialML.biologically_inspired_models.src.imagenet_mlp_mixer_tasks_commons import get_basic_mlp_mixer_params
 
 class Cifar10RetinaWarpCyclicLRAutoAugmentWideResNet4x22(AbstractTask):
     input_size = [3, 32, 32]
@@ -93,6 +94,41 @@ class Ecoset10RetinaWarpCyclicLRRandAugmentXResNet2x18(AbstractTask):
             OneCycleLRConfig(max_lr=0.4, epochs=nepochs, steps_per_epoch=376, pct_start=0.2, anneal_strategy='linear'),
             logdir=LOGDIR, batch_size=128
         )
+
+class Ecoset10RetinaWarpCyclicRandAugmentMLPMixerS16(AbstractTask):
+    imgs_size = 224
+    input_size = [3, imgs_size, imgs_size]
+    noise_std = 0.25
+    def get_dataset_params(self) :
+        p = get_ecoset10_params(train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        return p
+    
+    def get_model_params(self):
+        rblur_p = RetinaWarp.ModelParams(RetinaWarp, self.input_size, batch_size=32)
+        mixer_p = get_basic_mlp_mixer_params(self.input_size, 10, 16, 512, 2048, 256, nn.GELU, 0., 8)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rblur_p, mixer_p)
+        return p
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            MixedPrecisionAdversarialTrainer.TrainerParams(MixedPrecisionAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            AdamOptimizerConfig(weight_decay=5e-5),
+            OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=128)
 
 class Ecoset100RetinaWarpCyclicLRRandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224
