@@ -244,9 +244,9 @@ class ConsistentActivationModelAdversarialTrainer(AdversarialTrainer):
     
     @classmethod
     def get_params(cls):
-        return cls.ConsistentActivationModelAdversarialTrainerParams(cls)
+        return cls.TrainerParams(cls)
 
-    def __init__(self, params: ConsistentActivationModelAdversarialTrainerParams, *args, **kwargs):
+    def __init__(self, params: TrainerParams, *args, **kwargs):
         super().__init__(params, *args, **kwargs)
         self.params = params
         self._load_max_act_opt_lrs()
@@ -378,7 +378,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             test_acc[atk_name] = acc
             test_logits[atk_name] = logits.numpy()
             target_labels[atk_name] = y_tgt.detach().cpu().numpy().tolist()
-            self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
+            # self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
         return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels, 'logits': test_logits}, metrics
     
