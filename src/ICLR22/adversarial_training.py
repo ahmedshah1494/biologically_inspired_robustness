@@ -18,7 +18,7 @@ from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
 from adversarialML.biologically_inspired_models.src.task_utils import *
 from adversarialML.biologically_inspired_models.src.imagenet_mlp_mixer_tasks_commons import get_basic_mlp_mixer_params
-
+from adversarialML.biologically_inspired_models.src.vit_models import ViTClassifier
 from task_utils import get_pgd_inf_params
 
 class Cifar10AdvTrainCyclicLRAutoAugmentWideResNet4x22(AbstractTask):
@@ -123,6 +123,41 @@ class Ecoset10AdvTrainRandAugmentMLPMixerS16(AbstractTask):
             AdamOptimizerConfig(weight_decay=5e-5),
             OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
             logdir=LOGDIR, batch_size=128)
+
+class Ecoset10AdvTrainRandAugmentViTB16(AbstractTask):
+    input_width = 224
+    def get_dataset_params(self) :
+        p = get_ecoset10_params(train_transforms=[
+                torchvision.transforms.Resize(self.input_width),
+                torchvision.transforms.RandomCrop(self.input_width),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.input_width),
+                torchvision.transforms.CenterCrop(self.input_width),
+            ])
+        return p
+    
+    def get_model_params(self):
+        return ViTClassifier.ModelParams(ViTClassifier, num_labels=10)
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            MixedPrecisionAdversarialTrainer.TrainerParams(MixedPrecisionAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                ),
+                AdversarialParams(training_attack_params=get_pgd_inf_params([0.008], 1, 0.008*1.25)[0])
+            ),
+            AdamOptimizerConfig(weight_decay=5e-5),
+            OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=128)
+
+class Ecoset10AdvTrainRandAugmentViTCustomSmall(Ecoset10AdvTrainRandAugmentViTB16):
+    def get_model_params(self):
+        return ViTClassifier.ModelParams(ViTClassifier, num_labels=10, hidden_size=512, num_hidden_layers=8, intermediate_size=2048, num_attention_heads=8)
 
 class Ecoset100AdvTrainCyclicLRRandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224

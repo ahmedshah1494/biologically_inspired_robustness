@@ -18,6 +18,7 @@ from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
 from adversarialML.biologically_inspired_models.src.task_utils import *
 from adversarialML.biologically_inspired_models.src.imagenet_mlp_mixer_tasks_commons import get_basic_mlp_mixer_params
+from adversarialML.biologically_inspired_models.src.vit_models import ViTClassifier
 
 class Cifar10RetinaWarpCyclicLRAutoAugmentWideResNet4x22(AbstractTask):
     input_size = [3, 32, 32]
@@ -130,6 +131,48 @@ class Ecoset10RetinaWarpCyclicRandAugmentMLPMixerS16(AbstractTask):
             OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
             logdir=LOGDIR, batch_size=128)
 
+class Ecoset10RetinaWarpCyclicRandAugmentViT16(AbstractTask):
+    imgs_size = 224
+    input_size = [3, imgs_size, imgs_size]
+    noise_std = 0.25
+    def get_dataset_params(self) :
+        p = get_ecoset10_params(train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        return p
+    
+    def get_model_params(self):
+        rblur_p = RetinaWarp.ModelParams(RetinaWarp, self.input_size, batch_size=32)
+        vit_p = ViTClassifier.ModelParams(ViTClassifier, num_labels=10)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rblur_p, vit_p)
+        return p
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            MixedPrecisionAdversarialTrainer.TrainerParams(MixedPrecisionAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            AdamOptimizerConfig(weight_decay=5e-5),
+            OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=128)
+
+class Ecoset10RetinaWarpCyclicRandAugmentViTCustomSmall(Ecoset10RetinaWarpCyclicRandAugmentViT16):
+    def get_model_params(self):
+        rblur_p = RetinaWarp.ModelParams(RetinaWarp, self.input_size, batch_size=32)
+        vit_p = ViTClassifier.ModelParams(ViTClassifier, num_labels=10, hidden_size=512, num_hidden_layers=8, intermediate_size=2048, num_attention_heads=8)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rblur_p, vit_p)
+        return p
+
 class Ecoset100RetinaWarpCyclicLRRandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224
     input_size = [3, imgs_size, imgs_size]
@@ -204,6 +247,6 @@ class EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18(AbstractTask):
             SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
             # OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=1839, pct_start=0.05, anneal_strategy='linear'),
             # OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=5632, pct_start=0.1, anneal_strategy='linear'),
-            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=5632, pct_start=0.2, anneal_strategy='linear'),
+            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=5632, pct_start=0.2, anneal_strategy='linear'), # 2 GPUs, batch size 256
             logdir=LOGDIR, batch_size=64
         )
