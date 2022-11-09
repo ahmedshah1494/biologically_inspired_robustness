@@ -171,6 +171,11 @@ class Cifar10NoisyRetinaBlurS1250WRandomScalesCyclicLRAutoAugmentWideResNet4x22(
             OneCycleLRConfig(max_lr=0.4, epochs=nepochs, steps_per_epoch=352, pct_start=0.2, anneal_strategy='linear'),
             logdir=LOGDIR, batch_size=128
         )
+class Cifar10NoisyRetinaBlurS2500WRandomScalesCyclicLRAutoAugmentWideResNet4x22(Cifar10NoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22):
+    noise_std = 0.25
+
+class Cifar10NoisyRetinaBlurS5000WRandomScalesCyclicLRAutoAugmentWideResNet4x22(Cifar10NoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22):
+    noise_std = 0.5
 
 class Ecoset10NoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224
