@@ -2,7 +2,7 @@ import torchvision
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import NormalizationLayer
 from adversarialML.biologically_inspired_models.src.models import (
     CommonModelParams, GeneralClassifier, SequentialLayers, XResNet34, XResNet18, XResNet50, WideResnet,
-    ActivationLayer, BatchNorm2DLayer)
+    ActivationLayer, BatchNorm2DLayer, FovTexVGG)
 from adversarialML.biologically_inspired_models.src.retina_preproc import (
     RetinaBlurFilter, RetinaNonUniformPatchEmbedding, RetinaWarp, GaussianBlurLayer)
 from adversarialML.biologically_inspired_models.src.supconloss import \
@@ -55,6 +55,42 @@ class Cifar10CyclicLRAutoAugmentWideResNet4x22(AbstractTask):
             logdir=LOGDIR, batch_size=128
         )
 
+class Cifar10CyclicLRAutoAugmentFovTexVGG(AbstractTask):
+    img_size = 256
+    input_size = [3, img_size, img_size]
+    widen_factor = 4
+    depth = 22
+    def get_dataset_params(self):
+        p = get_cifar10_params(num_train=50_000, num_test=10_000)
+        p.custom_transforms = (
+            torchvision.transforms.Compose([
+                torchvision.transforms.RandomCrop(32, padding=4, padding_mode='reflect'),
+                torchvision.transforms.Resize(self.img_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.AutoAugment(torchvision.transforms.AutoAugmentPolicy.CIFAR10),
+                torchvision.transforms.ToTensor()
+            ]),
+            torchvision.transforms.ToTensor()
+        )
+        return p
+
+    def get_model_params(self):
+        p = FovTexVGG.ModelParams(FovTexVGG, CommonModelParams(self.input_size, 10), num_classes=10, permutation=None)
+        return p
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            AdversarialTrainer.TrainerParams(AdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-5, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=1e-3, epochs=nepochs, steps_per_epoch=352, pct_start=0.2, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=128
+        )
+
 class Ecoset10CyclicLRRandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224
     input_size = [3, imgs_size, imgs_size]
@@ -76,6 +112,40 @@ class Ecoset10CyclicLRRandAugmentXResNet2x18(AbstractTask):
         return XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 10), num_classes=10,
                                             normalization_layer_params=NormalizationLayer.get_params(),
                                             widen_factor=self.widen_factor)
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            MixedPrecisionAdversarialTrainer.TrainerParams(MixedPrecisionAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.4, epochs=nepochs, steps_per_epoch=376, pct_start=0.2, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=128
+        )
+
+class Ecoset10CyclicLRRandAugmentFovTexVGG(AbstractTask):
+    imgs_size = 256
+    input_size = [3, imgs_size, imgs_size]
+    widen_factor = 2
+    def get_dataset_params(self) :
+        p = get_ecoset10_params(train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        return p
+
+    def get_model_params(self):
+        p = FovTexVGG.ModelParams(FovTexVGG, CommonModelParams(self.input_size, 10), num_classes=10, permutation=None)
+        return p
 
     def get_experiment_params(self) -> BaseExperimentConfig:
         nepochs = 60
