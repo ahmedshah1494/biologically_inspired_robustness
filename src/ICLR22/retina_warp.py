@@ -216,7 +216,7 @@ class EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18(AbstractTask):
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
     def get_dataset_params(self) :
-        p = get_ecoset_params(train_transforms=[
+        p = get_ecoset_folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -226,6 +226,9 @@ class EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18(AbstractTask):
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.CenterCrop(self.imgs_size),
             ])
+        # Pointing to a folder with only the test set, and some dummy train and val data. 
+        # Use this on workhorse to avoid delay due to slow NFS.
+        # p.datafolder = f'{logdir_root}/ecoset/eval_dataset_dir'
         return p
 
     def get_model_params(self):

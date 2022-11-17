@@ -222,6 +222,28 @@ class Ecoset10NoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Abs
 class Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10NoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
     noise_std = 0.25
 
+class Ecoset10NoisyRetinaBlurS2500StdScale001WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
+    std_scale = .001
+    def get_model_params(self):
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
+        rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
+                                                scale=self.std_scale)
+        rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 10), num_classes=10,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, resnet_p)
+        return p
+
+class Ecoset10NoisyRetinaBlurS2500StdScale010WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10NoisyRetinaBlurS2500StdScale001WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
+    std_scale = .01
+class Ecoset10NoisyRetinaBlurS2500StdScale025WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10NoisyRetinaBlurS2500StdScale001WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
+    std_scale = .025
+
+class Ecoset10NoisyRetinaBlurS2500StdScale075WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10NoisyRetinaBlurS2500StdScale001WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
+    std_scale = .075
+
 class Ecoset10NoisyRetinaBlurS5000WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10NoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
     noise_std = 0.5
 
@@ -286,8 +308,7 @@ class Ecoset10NoisyRetinaBlurWRandomScalesCyclicRandAugmentMLPMixerS16(AbstractT
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
-                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
-                                                no_blur=True)
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform')
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         mixer_p = get_basic_mlp_mixer_params(self.input_size, 10, 16, 512, 2048, 256, nn.GELU, 0., 8)
         p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, mixer_p)
@@ -296,14 +317,14 @@ class Ecoset10NoisyRetinaBlurWRandomScalesCyclicRandAugmentMLPMixerS16(AbstractT
     def get_experiment_params(self) -> BaseExperimentConfig:
         nepochs = 60
         return BaseExperimentConfig(
-            MixedPrecisionAdversarialTrainer.TrainerParams(MixedPrecisionAdversarialTrainer,
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
                 TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
                     tracking_mode='max', scheduler_step_after_epoch=False
                 )
             ),
             AdamOptimizerConfig(weight_decay=5e-5),
             OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
-            logdir=LOGDIR, batch_size=128)
+            logdir=LOGDIR, batch_size=32) # run with 4 GPUs to get batch size 128
 
 class Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicRandAugmentMLPMixerS16(Ecoset10NoisyRetinaBlurWRandomScalesCyclicRandAugmentMLPMixerS16):
     noise_std = 0.25
@@ -328,8 +349,7 @@ class Ecoset10NoisyRetinaBlurWRandomScalesCyclicRandAugmentViTB16(AbstractTask):
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
-                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
-                                                no_blur=True)
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform')
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         vit_p = ViTClassifier.ModelParams(ViTClassifier, num_labels=10)
         p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, vit_p)
@@ -338,14 +358,14 @@ class Ecoset10NoisyRetinaBlurWRandomScalesCyclicRandAugmentViTB16(AbstractTask):
     def get_experiment_params(self) -> BaseExperimentConfig:
         nepochs = 60
         return BaseExperimentConfig(
-            MixedPrecisionAdversarialTrainer.TrainerParams(MixedPrecisionAdversarialTrainer,
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
                 TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
                     tracking_mode='max', scheduler_step_after_epoch=False
                 )
             ),
             AdamOptimizerConfig(weight_decay=5e-5),
             OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
-            logdir=LOGDIR, batch_size=128)
+            logdir=LOGDIR, batch_size=32) # run with 4 GPUs to get batch size 128
 
 class Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicRandAugmentViTB16(Ecoset10NoisyRetinaBlurWRandomScalesCyclicRandAugmentViTB16):
     noise_std = 0.25
@@ -354,8 +374,7 @@ class Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicRandAugmentViTCustomSmall(E
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
-                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
-                                                no_blur=True)
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform')
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         vit_p = ViTClassifier.ModelParams(ViTClassifier, num_labels=10, hidden_size=512, num_hidden_layers=8, intermediate_size=2048, num_attention_heads=8)
         p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, vit_p)
@@ -377,6 +396,9 @@ class Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18(Abstra
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.CenterCrop(self.imgs_size),
             ])
+        # Pointing to a folder with only the test set, and some dummy train and val data. 
+        # Use this on workhorse to avoid delay due to slow NFS.
+        # p.datafolder = f'{logdir_root}/ecoset-100/eval_dataset_dir'
         return p
 
     def get_model_params(self):
@@ -421,6 +443,9 @@ class EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18(AbstractT
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.CenterCrop(self.imgs_size),
             ])
+        # Pointing to a folder with only the test set, and some dummy train and val data. 
+        # Use this on workhorse to avoid delay due to slow NFS.
+        # p.datafolder = f'{logdir_root}/ecoset/eval_dataset_dir'
         return p
 
     def get_model_params(self):
