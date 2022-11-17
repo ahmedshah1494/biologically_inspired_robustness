@@ -21,9 +21,10 @@ from scipy.stats.mstats import f_oneway
 from matplotlib.animation import FuncAnimation
 import torch
 from tqdm import tqdm
-from adversarialML.biologically_inspired_models.src.utils import _compute_area_under_curve, load_logs, get_eps_from_logdict_key, load_json, aggregate_dicts
+from adversarialML.biologically_inspired_models.src.utils import _compute_area_under_curve, load_logs, get_eps_from_logdict_key, load_json, aggregate_dicts, lazy_load_pickle
 from adversarialML.biologically_inspired_models.src.ICLR22.write_all_results_to_csv import create_all_metrics_df
 import re
+# plt.rcParams['text.usetex'] = True
 
 def dataframe_or(df, key, values):
     df_ = (df[key] == values[0])
@@ -44,7 +45,7 @@ def create_data_df(logdicts, plot_config):
         # best_model_idx = np.argmax(test_acc[min(test_acc.keys())])
         for atkstr, accs in test_acc.items():
             atkname, eps = get_eps_from_logdict_key(atkstr)
-            if (('L2' in atkname) and (eps <= 2.5)) or (eps <= 0.032):
+            if (('L2' in atkname) and (eps <= 2.5)) or (eps <= 0.016):
                 if atkname in metrics_to_plot:
                     # accs = [accs[best_model_idx]]
                     for i,a in enumerate(accs):
@@ -59,7 +60,7 @@ def create_data_df(logdicts, plot_config):
                         r = {
                             'Method': model_name,
                             f'Perturbation Distance ‖ϵ‖{2 if "L2" in atkname else "∞"}': float(eps),
-                            'Accuracy': a,
+                            'Accuracy': a*100,
                             'Attack': atkname
                         }
                         data.append(r)
@@ -93,8 +94,94 @@ def get_logdict(plot_config):
         expdirs = [os.path.join(logdir, x) for x in os.listdir(logdir)]
         metric_files = [os.path.join(d, 'adv_metrics.json') for d in expdirs]
         metrics = aggregate_dicts([load_json(x) for x in metric_files if os.path.exists(x)])
-        logdict[label] = {'metrics': metrics}
+        rs_files = [os.path.join(d, 'randomized_smoothing_preds_and_radii.pkl') for d in expdirs]
+        lazy_rs_preds_and_radii = [lazy_load_pickle(x) for x in rs_files if os.path.exists(x)]
+        logdict[label] = {'metrics': metrics, 'rs_preds_and_radii': lazy_rs_preds_and_radii}
     return logdict
+
+def load_cc_results(plot_config, path_and_label_file):
+    def compute_accuracy_per_severity(lnp_pth, cns_list):
+        print(lnp_pth)
+        lnp = np.loadtxt(lnp_pth, skiprows=1, delimiter=',')
+        is_correct = (lnp[:,0] == lnp[:,1]).astype(float)
+
+        cns2acc = {}
+        for cns, ic in zip(cns_list, is_correct):
+            cns2acc.setdefault(tuple(cns), []).append(ic)
+        cns2acc = {k: np.mean(v) for k,v in cns2acc.items()}
+        return cns2acc
+
+        # corr_types = np.array([x[0] for x in cns_list])
+        # sevs = np.array([int(x[1]) for x in cns_list])
+        # sev2acc = {}
+        # for sev in sorted(set(sevs)):
+        #     sev2acc[sev] = is_correct[sevs == sev].mean()
+        # print(sev2acc)
+        # return sev2acc
+
+    with open(path_and_label_file) as f:
+        fnames = [l.split(',')[-1].split('/')[-1].split('.')[0] for l in f.readlines()]
+        corruption_and_severity = [fn[:fn.index('-')+2].split('-') for fn in fnames]
+        corruption_and_severity = [(x[0],int(x[1])) for x in corruption_and_severity]
+    logdirs_and_labels = [(ld, label, atk[0]) for label, (ld, atk) in plot_config.items()]
+    logdict = {}
+    for logdir, label, atk in logdirs_and_labels:
+        expdirs = [os.path.join(logdir, x) for x in os.listdir(logdir)]
+        metric_files = [os.path.join(d, 'per_attack_results', f'{atk}-0.0_label_and_preds.csv') for d in expdirs]
+        print(metric_files)
+        metrics = aggregate_dicts([compute_accuracy_per_severity(x, corruption_and_severity) for x in metric_files if os.path.exists(x)])
+        logdict[label] = {'metrics': metrics}
+
+    # rows = []
+    # for method, ld in logdict.items():
+    #     for sev, accs in ld['metrics'].items():
+    #         for a in accs:
+    #             r = {
+    #                 'Method': method,
+    #                 'Corruption Severity': sev,
+    #                 "Accuracy": a
+    #             }
+    #             rows.append(r)
+    class2corr = {
+        'noise': ['gaussian_noise',
+                'shot_noise',
+                'impulse_noise',
+                'speckle_noise',],
+        'blur': ['defocus_blur',
+                'glass_blur',
+                'motion_blur',
+                'zoom_blur',
+                'gaussian_blur',],
+        'weather': ['snow',
+                    'frost',
+                    'fog',
+                    'brightness',
+                    'spatter',],
+        'digital': ['contrast',
+                    'elastic_transform',
+                    'pixelate',
+                    'jpeg_compression',
+                    'saturate',]
+    }
+    corr2class = {}
+    for cl,cors in class2corr.items():
+        for c in cors:
+            corr2class[c] = cl
+
+    rows = []
+    for method, ld in logdict.items():
+        for (corr, sev), accs in ld['metrics'].items():
+            for a in accs:
+                r = {
+                    'Method': method,
+                    'Corruption Severity': sev,
+                    'Corruption Method': corr,
+                    'Corruption Type': corr2class[corr],
+                    'Accuracy': a
+                }
+                rows.append(r)
+    df = pd.DataFrame(rows)
+    return df
 
 def maybe_create_dir(d):
     if not os.path.exists(d):
@@ -103,7 +190,7 @@ def maybe_create_dir(d):
 
 log_root = '/share/workhorse3/mshah1/biologically_inspired_models/iclr22_logs'
 outdir_root = 'ICLR22/visualizations'
-sns.set(font_scale=1.25)
+sns.set(font_scale=1.5)
 
 def plot_cifar10_pgdinf_results():
     plot_config = OrderedDict([
@@ -111,7 +198,7 @@ def plot_cifar10_pgdinf_results():
         # ('GBlur (σ=1.5)', (f'{log_root}/cifar10-0.0/Cifar10GaussianBlurCyclicLRAutoAugmentWideResNet4x22', ['APGD'])),
         ('R-Warp', (f'{log_root}/cifar10-0.0/Cifar10RetinaWarpCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGD'])),
         ('R-Blur', (f'{log_root}/cifar10-0.0/Cifar10NoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGD'])),
-        ('G-Noise', (f'{log_root}/cifar10-0.0/Cifar10GaussianNoiseCyclicLRAutoAugmentWideResNet4x22', ['APGD'])),
+        # ('G-Noise', (f'{log_root}/cifar10-0.0/Cifar10GaussianNoiseCyclicLRAutoAugmentWideResNet4x22', ['APGD'])),
         ('AT', (f'{log_root}/cifar10-0.008/Cifar10AdvTrainCyclicLRAutoAugmentWideResNet4x22', ['APGD'])),
     ])
 
@@ -119,7 +206,11 @@ def plot_cifar10_pgdinf_results():
     df = create_data_df(logdicts, plot_config)
     outdir = maybe_create_dir(f'{outdir_root}/cifar10')
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] > 0.])
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] > 0.])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
     plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf.png'))
@@ -136,7 +227,7 @@ def plot_cifar10_pgdl2_results():
         # ('GBlur (σ=1.5)', (f'{log_root}/cifar10-0.0/Cifar10GaussianBlurCyclicLRAutoAugmentWideResNet4x22', ['APGDL2'])),
         ('R-Warp', (f'{log_root}/cifar10-0.0/Cifar10RetinaWarpCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGDL2'])),
         ('R-Blur', (f'{log_root}/cifar10-0.0/Cifar10NoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGDL2'])),
-        ('G-Noise', (f'{log_root}/cifar10-0.0/Cifar10GaussianNoiseCyclicLRAutoAugmentWideResNet4x22', ['APGDL2'])),
+        # ('G-Noise', (f'{log_root}/cifar10-0.0/Cifar10GaussianNoiseCyclicLRAutoAugmentWideResNet4x22', ['APGDL2'])),
         ('AT', (f'{log_root}/cifar10-0.008/Cifar10AdvTrainCyclicLRAutoAugmentWideResNet4x22', ['APGDL2'])),
     ])
 
@@ -144,8 +235,12 @@ def plot_cifar10_pgdl2_results():
     df = create_data_df(logdicts, plot_config)
     outdir = maybe_create_dir(f'{outdir_root}/cifar10')
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖2'] > 0.])
-    
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖2'] > 0.])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
+    plt.legend(loc='upper right')
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_l2.png'))
     plt.close()
@@ -156,7 +251,7 @@ def plot_ecoset10_pgdinf_results():
         # ('GBlur (σ=10.5)', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
         ('R-Warp', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
         ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
-        ('G-Noise', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        # ('G-Noise', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGD'])),
         ('AT', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
     ])
 
@@ -164,7 +259,11 @@ def plot_ecoset10_pgdinf_results():
     df = create_data_df(logdicts, plot_config)
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] > 0.])
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] > 0.])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
     plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf.png'))
@@ -181,15 +280,20 @@ def plot_ecoset100_pgdinf_results():
         # ('GBlur (σ=10.5)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianBlurCyclicLRRandAugmentXResNet2x18', ['APGD'])),
         ('R-Warp', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100RetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
         ('R-Blur', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
-        ('G-Noise', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        # ('G-Noise', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGD'])),
         ('AT', (f'{log_root}/ecoset100_folder-0.008/Ecoset100AdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
     ])
 
     logdicts = get_logdict(plot_config)
     df = create_data_df(logdicts, plot_config)
+    print(df)
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset100')
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] > 0.])
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] > 0.])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
     plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf.png'))
@@ -203,9 +307,9 @@ def plot_ecoset100_pgdinf_results():
 def plot_ecoset_pgdinf_results():
     plot_config = OrderedDict([
         ('ResNet', (f'{log_root}/ecoset-0.0/EcosetCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('R-Warp', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
         ('R-Blur', (f'{log_root}/ecoset-0.0/EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
-        # ('R-Warp', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
-        ('G-Noise', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        # ('G-Noise', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGD'])),
         ('AT', (f'{log_root}/ecoset-0.008/EcosetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
     ])
 
@@ -214,7 +318,11 @@ def plot_ecoset_pgdinf_results():
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset')
     print(df)
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] > 0.])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
     plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf.png'))
@@ -231,7 +339,7 @@ def plot_ecoset10_pgdl2_results():
         # ('GBlur (σ=10.5)', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18', ['APGDL2'])),
         ('R-Warp', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
         ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGDL2'])),
-        ('G-Noise', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+        # ('G-Noise', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
         ('AT', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
     ])
 
@@ -239,7 +347,11 @@ def plot_ecoset10_pgdl2_results():
     df = create_data_df(logdicts, plot_config)
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖2'] > 0.])
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖2'] > 0.])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
     plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_l2.png'))
@@ -251,15 +363,20 @@ def plot_ecoset100_pgdl2_results():
         # ('GBlur (σ=10.5)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianBlurCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
         ('R-Warp', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100RetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
         ('R-Blur', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
-        ('G-Noise', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+        # ('G-Noise', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
         ('AT', (f'{log_root}/ecoset100_folder-0.008/Ecoset100AdvTrainCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
     ])
 
     logdicts = get_logdict(plot_config)
     df = create_data_df(logdicts, plot_config)
+    print(df)
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset100')
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, estimator=max, ci=None, data=df[df['Perturbation Distance ‖ϵ‖2'] > 0.])
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, estimator=max, ci=None, data=df[df['Perturbation Distance ‖ϵ‖2'] > 0.])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
     plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_l2.png'))
@@ -268,10 +385,10 @@ def plot_ecoset100_pgdl2_results():
 def plot_ecoset_pgdl2_results():
     plot_config = OrderedDict([
         ('ResNet', (f'{log_root}/ecoset-0.0/EcosetCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
-        ('R-Blur (σ=0.25)', (f'{log_root}/ecoset-0.0/EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
-        # ('R-Warp', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
-        ('G-Noise (σ=0.125)', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
-        ('AT (‖ϵ‖∞=0.008)', (f'{log_root}/ecoset-0.008/EcosetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+        ('R-Warp', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
+        ('R-Blur', (f'{log_root}/ecoset-0.0/EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
+        # ('G-Noise', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+        ('AT', (f'{log_root}/ecoset-0.008/EcosetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
     ])
 
     logdicts = get_logdict(plot_config)
@@ -279,7 +396,12 @@ def plot_ecoset_pgdl2_results():
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset')
     print(df)
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, data=df[(df['Perturbation Distance ‖ϵ‖2'] > 0.) & (df['Perturbation Distance ‖ϵ‖2'] != 1)])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
+    plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_l2.png'))
     plt.close()
@@ -331,15 +453,15 @@ def plot_cifar10_pgdinf_training_ablation_results():
 
 def plot_ecoset10_pgdinf_training_ablation_results():
     plot_config = OrderedDict([
-        ('VDT-5FI', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
-        ('VDT-CFI', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
-        ('FDT-5FI', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500CyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
-        ('NoNoise', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
-        ('OnlyColor', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500OnlyColorWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
-        ('NoBlur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500NoBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
-        ('G-Noise', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseS2500CyclicLRRandAugmentXResNet2x18', ['APGD'])),
-        ('GBlur-WNoise', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyGaussianBlurS2500CyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
-        ('GBlur-NoNoise', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
+        ('Everything', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('No 5Fixations', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
+        ('No VDT', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500CyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('No Noise', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('Only Color', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500OnlyColorWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('No Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500NoBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('Only Noise', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseS2500CyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('Non-Adaptive-Blur with Noise', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyGaussianBlurS2500CyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
+        ('Non-Adaptive-Blur without Noise', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
         # ('FDT-CFI', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaBlurCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
     ])
 
@@ -423,10 +545,11 @@ def plot_cifar10_certified_robustness_results():
 
 def plot_ecoset10_certified_robustness_results():
     plot_config = OrderedDict([
-        ('R-Blur-5FI (σ=0.25)', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5Fixation-0.125', '5Fixation-0.25'])),
+        # ('R-Blur-5FI (σ=0.25)', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5Fixation-0.125', '5Fixation-0.25'])),
+        ('R-Blur-CFI (σ=0.125)', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['Centered-0.125', 'Centered-0.25'])),
         ('R-Blur-CFI (σ=0)', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['Centered-0.125', 'Centered-0.25'])),
         ('G-Noise (σ=0.125)', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['0.125', '0.25'])),
-        ('G-Noise (σ=0.25)', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseS2500CyclicLRRandAugmentXResNet2x18', ['0.25'])),
+        # ('G-Noise (σ=0.25)', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseS2500CyclicLRRandAugmentXResNet2x18', ['0.25'])),
     ])
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
     logdicts = get_logdict(plot_config)
@@ -442,13 +565,32 @@ def plot_ecoset10_certified_robustness_results():
 def plot_ecoset100_certified_robustness_results():
     plot_config = OrderedDict([
         ('R-Blur-5FI (σ=0.125)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5Fixation-0.125', '5Fixation-0.25'])),
+        ('R-Blur-5FI (σ=0.0)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100RetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5Fixation-0.125', '5Fixation-0.25'])),
+        ('R-Blur-CFI (σ=0.125)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['Centered-0.125', 'Centered-0.25'])),
         ('G-Noise (σ=0.125)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['0.125', '0.25'])),
     ])
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset100')
     logdicts = get_logdict(plot_config)
     df = create_rs_dataframe(logdicts, plot_config, 100)
     plt.figure(figsize=(5,8))
-    with sns.plotting_context("paper", font_scale=2.4, rc={'lines.linewidth': 1.75}):
+    with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
+        sns.set_style("whitegrid")
+        plot=sns.relplot(x='radius', y='accuracy', hue='model_name', row='σ', hue_order=plot_config.keys(), data=df, kind='line')
+        sns.move_legend(plot, "upper center", bbox_to_anchor=(0.78, 0.95))
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'rs_certified_acc_line.png'))
+
+def plot_ecoset_certified_robustness_results():
+    plot_config = OrderedDict([
+        # ('R-Warp-CFI', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['Centered-0.125', 'Centered-0.25'])),
+        ('R-Blur-CFI (σ=0.125)', (f'{log_root}/ecoset-0.0/EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['Centered-0.125', 'Centered-0.25'])),
+        ('G-Noise (σ=0.125)', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['0.125', '0.25'])),
+    ])
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset')
+    logdicts = get_logdict(plot_config)
+    df = create_rs_dataframe(logdicts, plot_config, 200)
+    plt.figure(figsize=(5,8))
+    with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
         sns.set_style("whitegrid")
         plot=sns.relplot(x='radius', y='accuracy', hue='model_name', row='σ', hue_order=plot_config.keys(), data=df, kind='line')
         sns.move_legend(plot, "upper center", bbox_to_anchor=(0.78, 0.95))
@@ -460,8 +602,9 @@ def plot_ecoset10_pgdinf_atrblur_results():
     plot_config = OrderedDict([
         ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
         ('AT', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
-        ('AT+R-Blur (σ=0.25)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainNoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
-        ('AT+R-Blur (σ=0.0)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        # ('AT+R-Blur (σ=0.25)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainNoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('AT+R-Blur (1-step)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('AT+R-Blur (7-steps)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrain7StepsRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
     ])
 
     logdicts = get_logdict(plot_config)
@@ -469,8 +612,8 @@ def plot_ecoset10_pgdinf_atrblur_results():
     print(df)
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] > 0.])
-    # plt.legend([],[], frameon=False)
+    sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_atrblur.png'))
     plt.close()
@@ -484,8 +627,9 @@ def plot_ecoset10_pgdl2_atrblur_results():
     plot_config = OrderedDict([
         ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGDL2'])),
         ('AT', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
-        ('AT+R-Blur (σ=0.25)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainNoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGDL2'])),
-        ('AT+R-Blur (σ=0.0)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGDL2'])),
+        # ('AT+R-Blur (σ=0.25)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainNoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGDL2'])),
+        ('AT+R-Blur (1-step)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGDL2'])),
+        ('AT+R-Blur (7-steps)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrain7StepsRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGDL2'])),
     ])
 
     logdicts = get_logdict(plot_config)
@@ -518,7 +662,7 @@ def plot_ecoset10_pgdinf_results2():
     sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
     plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
     plt.ylim((0,1))
-    plt.yticks([i/10 for i in range(11)])
+    plt.yticks([i*10 for i in range(11)])
     # plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf-2.png'))
@@ -543,7 +687,7 @@ def plot_ecoset10_pgdl2_results2():
     sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖2'] > 0.])
     plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
     plt.ylim((0,1))
-    plt.yticks([i/10 for i in range(11)])
+    plt.yticks([i*10 for i in range(11)])
     # plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_l2-2.png'))
@@ -557,7 +701,7 @@ def plot_ecoset10_pgdinf_vit_results():
     plot_config = OrderedDict([
         ('ViT', (f'{log_root}/ecoset10-0.0/Ecoset10RandAugmentViTCustomSmall', ['APGD'])),
         ('R-Warp', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaWarpCyclicRandAugmentViTCustomSmall', ['5FixationAPGD'])),
-        ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicRandAugmentViTCustomSmall', ['5FixationAPGD'])),
+        ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicRandAugmentViTCustomSmall', ['CenteredAPGD'])),
         ('AT', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainRandAugmentViTCustomSmall', ['APGD'])),
     ])
 
@@ -569,7 +713,7 @@ def plot_ecoset10_pgdinf_vit_results():
     sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
     plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
     plt.ylim((0,1))
-    plt.yticks([i/10 for i in range(11)])
+    plt.yticks([i*10 for i in range(11)])
     # plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_vit.png'))
@@ -595,7 +739,7 @@ def plot_ecoset10_pgdinf_mlpmixer_results():
     sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
     plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
     plt.ylim((0,1))
-    plt.yticks([i/10 for i in range(11)])
+    plt.yticks([i*10 for i in range(11)])
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_mlpmixer.png'))
     plt.close()
@@ -622,7 +766,7 @@ def plot_ecoset10_pgdl2_mlpmixer_results():
     sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
     plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
     plt.ylim((0,1))
-    plt.yticks([i/10 for i in range(11)])
+    plt.yticks([i*10 for i in range(11)])
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_l2_mlpmixer.png'))
     plt.close()
@@ -635,9 +779,9 @@ def plot_ecoset10_pgdl2_mlpmixer_results():
 def plot_cifar10_pgdinf_atrblur_results():
     plot_config = OrderedDict([
         ('R-Blur', (f'{log_root}/cifar10-0.0/Cifar10NoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGD'])),
-        ('AT+R-Blur (σ=0.25)', (f'{log_root}/cifar10-0.008/Cifar10AdvTrainNoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGD'])),
-        ('AT+R-Blur (σ=0)', (f'{log_root}/cifar10-0.008/Cifar10AdvTrainRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGD'])),
+        # ('AT+R-Blur (σ=0.25)', (f'{log_root}/cifar10-0.008/Cifar10AdvTrainNoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGD'])),
         ('AT', (f'{log_root}/cifar10-0.008/Cifar10AdvTrainCyclicLRAutoAugmentWideResNet4x22', ['APGD'])),
+        ('AT+R-Blur (1-step)', (f'{log_root}/cifar10-0.008/Cifar10AdvTrainRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGD'])),
         ('AT+R-Blur (7-steps)', (f'{log_root}/cifar10-0.008/Cifar10AdvTrain7StepRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGD'])),
     ])
 
@@ -665,20 +809,237 @@ def plot_ecoset10_pgdinf_noisestd_results():
 
     logdicts = get_logdict(plot_config)
     df = create_data_df(logdicts, plot_config)
+    print(df)
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
-    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
+    with sns.plotting_context("paper", font_scale=2.4):
+        sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.2), ncol=4)
     plt.ylim((0,1))
-    plt.yticks([i/10 for i in range(11)])
+    plt.yticks([i*10 for i in range(0,11,2)], [i*10 for i in range(0,11,2)])
     # plt.legend([],[], frameon=False)
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_noisestd.png'))
+    # plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_noisestd.png'), bbox_inches='tight')
     plt.close()
 
     clean_results_df = df[df['Perturbation Distance ‖ϵ‖∞'] == 0]
     clean_results_df = pd.pivot_table(clean_results_df, values='Accuracy', index='Method')
     print(clean_results_df)
+
+def plot_ecoset10_pgdinf_fovarea_results():
+    plot_config = OrderedDict([
+        (100*(2*15/224)**2, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
+        (100*(2*31/224)**2, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredScale=1APGD'])),
+        (100*(2*48/224)**2, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredScale=2APGD'])),
+        (100*(2*64/224)**2, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredScale=3APGD'])),
+        (100*(2*87/224)**2, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredScale=4APGD'])),
+        (100, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredScale=5APGD'])),      
+    ])
+
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    colnames = {n:n for n in df.columns.to_list()}
+    colnames['Method'] = 'Proportion of Image at Fovea (%)'
+    df = df.rename(columns=colnames, errors="raise")
+    print(df)
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
+    sns.set_style("whitegrid")
+    cmap = plt.cm.get_cmap('Set1')
+    # sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
+        sns.lineplot(x='Proportion of Image at Fovea (%)', y='Accuracy', hue='Perturbation Distance ‖ϵ‖∞', style='Perturbation Distance ‖ϵ‖∞', 
+                markers=True, palette=cmap, data=df)
+    # plt.legend(loc='best', ncol=3)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=3)
+    # plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(0,11,2)], [i*10 for i in range(0,11,2)])
+    # plt.legend([],[], frameon=False)
+    # plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_fovarea.png'), bbox_inches='tight')
+    plt.close()
+
+def plot_ecoset10_pgdinf_beta_results():
+    plot_config = OrderedDict([
+        (0.001, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500StdScale001WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
+        (0.01, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500StdScale010WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
+        (0.025, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500StdScale025WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
+        (0.05, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
+        # (100*(2*64/224)**2, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
+        # (100*(2*87/224)**2, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
+        # (100, (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),      
+    ])
+
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    colnames = {n:n for n in df.columns.to_list()}
+    colnames['Method'] = 'β'
+    df = df.rename(columns=colnames, errors="raise")
+    print(df)
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
+    sns.set_style("whitegrid")
+    cmap = plt.cm.get_cmap('Set1')
+    # sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
+        sns.lineplot(x='β', y='Accuracy', hue='Perturbation Distance ‖ϵ‖∞', style='Perturbation Distance ‖ϵ‖∞', 
+                markers=True, palette=cmap, data=df)
+    # plt.legend(loc='best', ncol=3)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=3)
+    # plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(0,11,2)], [i*10 for i in range(0,11,2)])
+    # plt.legend([],[], frameon=False)
+    # plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_beta.png'), bbox_inches='tight')
+    plt.close()
+
+def plot_cifar10_cc_results():
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/cifar10-0.0/Cifar10CyclicLRAutoAugmentWideResNet4x22', ['CCAPGD'])),
+        ('R-Warp', (f'{log_root}/cifar10-0.0/Cifar10RetinaWarpCyclicLRAutoAugmentWideResNet4x22', ['5FixationCCAPGD'])),
+        ('R-Blur', (f'{log_root}/cifar10-0.0/Cifar10NoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationCCAPGD'])),
+        ('AT', (f'{log_root}/cifar10-0.008/Cifar10AdvTrainCyclicLRAutoAugmentWideResNet4x22', ['CCAPGD'])),
+    ])
+
+    df = load_cc_results(plot_config, '/home/mshah1/workhorse3/cifar-10-batches-py/distorted/test_img_ids_and_labels.csv')
+    print(df)
+    outdir = maybe_create_dir(f'{outdir_root}/cifar10')
+    sns.set_style("whitegrid")
+    sns.boxplot(x='Corruption Severity', y='Accuracy', hue='Method', hue_order=plot_config, data=df, showfliers=False)
+    plt.legend(loc='lower left', ncol=2)
+    # plt.legend([],[], frameon=False)
+    # plt.ylim((0,1))
+    # plt.yticks([i*10 for i in range(11)])
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_allcc.png'))
+    plt.close()
+
+    corruption_types = df['Corruption Type'].unique()
+    for i, ctype in enumerate(corruption_types):
+        sns.boxplot(x='Corruption Severity', y='Accuracy', 
+                    hue='Method', hue_order=plot_config, 
+                    data=df[df['Corruption Type'] == ctype])
+        if i == 0:
+            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
+        else:
+            plt.legend([],[], frameon=False)
+        plt.ylim((0,1))
+        plt.yticks([i*10 for i in range(11)])
+        plt.tight_layout()
+        plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}.png'))
+        plt.close()
+
+def plot_ecoset10_cc_results():
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/ecoset10-0.0/Ecoset10CyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+        # ('GBlur (σ=10.5)', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
+        ('R-Warp', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+        ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+        # ('G-Noise', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('AT', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+    ])
+
+    df = load_cc_results(plot_config, '/home/mshah1/workhorse3/ecoset-10/distorted/val_img_paths_and_labels.csv')
+    print(df)
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
+    sns.set_style("whitegrid")
+    sns.boxplot(x='Corruption Severity', y='Accuracy', hue='Method', hue_order=plot_config, data=df, showfliers=False)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
+    plt.legend([],[], frameon=False)
+    # plt.ylim((0,1))
+    # plt.yticks([i*10 for i in range(11)])
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_allcc.png'))
+    plt.close()
+
+    corruption_types = df['Corruption Type'].unique()
+    for i, ctype in enumerate(corruption_types):
+        sns.boxplot(x='Corruption Severity', y='Accuracy', 
+                    hue='Method', hue_order=plot_config, 
+                    data=df[df['Corruption Type'] == ctype])
+        if i == 0:
+            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
+        else:
+            plt.legend([],[], frameon=False)
+        plt.ylim((0,1))
+        plt.yticks([i*10 for i in range(11)])
+        plt.tight_layout()
+        plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}.png'))
+        plt.close()
+
+def plot_ecoset100_cc_results():
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100CyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+        # ('GBlur (σ=10.5)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianBlurCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('R-Warp', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100RetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+        ('R-Blur', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+        # ('G-Noise', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+        ('AT', (f'{log_root}/ecoset100_folder-0.008/Ecoset100AdvTrainCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+    ])
+
+    df = load_cc_results(plot_config, '/home/mshah1/workhorse3/ecoset-100/distorted/test_img_paths_and_labels.csv')
+    print(df)
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset100')
+    sns.set_style("whitegrid")
+    sns.boxplot(x='Corruption Severity', y='Accuracy', hue='Method', hue_order=plot_config, data=df, showfliers=False)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
+    plt.legend([],[], frameon=False)
+    # plt.ylim((0,1))
+    # plt.yticks([i*10 for i in range(11)])
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_allcc.png'))
+    plt.close()
+
+    corruption_types = df['Corruption Type'].unique()
+    for i, ctype in enumerate(corruption_types):
+        sns.boxplot(x='Corruption Severity', y='Accuracy', 
+                    hue='Method', hue_order=plot_config, 
+                    data=df[df['Corruption Type'] == ctype])
+        if i == 0:
+            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
+        else:
+            plt.legend([],[], frameon=False)
+        plt.ylim((0,1))
+        plt.yticks([i*10 for i in range(11)])
+        plt.tight_layout()
+        plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}.png'))
+        plt.close()
+
+def plot_ecoset_cc_results():
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/ecoset-0.0/EcosetCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+        ('R-Warp', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+        ('R-Blur', (f'{log_root}/ecoset-0.0/EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+        # ('G-Noise', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+        ('AT', (f'{log_root}/ecoset-0.008/EcosetAdvTrainCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+    ])
+
+    df = load_cc_results(plot_config, '/home/mshah1/workhorse3/ecoset/distorted/test_img_paths_and_labels-536K.csv')
+    print(df)
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset')
+    sns.set_style("whitegrid")
+    # sns.catplot(x='Corruption Severity', y='Accuracy', hue='Method', kind="box", col='Corruption Type', hue_order=plot_config, data=df)
+    sns.boxplot(x='Corruption Severity', y='Accuracy', hue='Method', hue_order=plot_config, data=df, showfliers=False)
+    # plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
+    plt.legend([],[], frameon=False)
+    # plt.ylim((0,1))
+    # plt.yticks([i*10 for i in range(11)])
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_allcc.png'))
+    plt.close()
+
+    corruption_types = df['Corruption Type'].unique()
+    for i, ctype in enumerate(corruption_types):
+        sns.boxplot(x='Corruption Severity', y='Accuracy', 
+                    hue='Method', hue_order=plot_config, 
+                    data=df[df['Corruption Type'] == ctype])
+        if i == 0:
+            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
+        else:
+            plt.legend([],[], frameon=False)
+        plt.ylim((0,1))
+        plt.yticks([i*10 for i in range(11)])
+        plt.tight_layout()
+        plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}.png'))
+        plt.close()
 
 # def plot_ecoset10_pgdl2_training_ablation_results():
 #     plot_config = OrderedDict([
@@ -715,16 +1076,131 @@ def plot_ecoset10_pgdinf_noisestd_results():
 # plot_cifar10_certified_robustness_results()
 # plot_ecoset10_certified_robustness_results()
 # plot_ecoset100_certified_robustness_results()
+# plot_ecoset_certified_robustness_results()
 
 # plot_ecoset10_pgdinf_atrblur_results()
 # plot_ecoset10_pgdl2_atrblur_results()
-plot_cifar10_pgdinf_atrblur_results()
+# plot_cifar10_pgdinf_atrblur_results()
 
 # plot_ecoset10_pgdinf_results2()
-# plot_ecoset10_pgdinf_vit_results()
+plot_ecoset10_pgdinf_vit_results()
 # plot_ecoset10_pgdinf_mlpmixer_results()
 
 # plot_ecoset10_pgdl2_results2()
 # plot_ecoset10_pgdl2_mlpmixer_results()
 
 # plot_ecoset10_pgdinf_noisestd_results()
+# plot_ecoset10_pgdinf_fovarea_results()
+# plot_ecoset10_pgdinf_beta_results()
+
+# plot_cifar10_cc_results()
+# plot_ecoset10_cc_results()
+# plot_ecoset100_cc_results()
+# plot_ecoset_cc_results()
+
+# def foo():
+#     plot_config = OrderedDict([
+#         ('ResNet', (f'{log_root}/ecoset-0.0/EcosetCyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
+#         ('R-Warp', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD', '5FixationAPGDL2'])),
+#         ('R-Blur', (f'{log_root}/ecoset-0.0/EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD', '5FixationAPGDL2'])),
+#         ('AT', (f'{log_root}/ecoset-0.008/EcosetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
+#     ])
+#     logdicts = get_logdict(plot_config)
+#     ecoset_df = create_data_df(logdicts, plot_config)
+
+#     plot_config = OrderedDict([
+#         ('ResNet', (f'{log_root}/cifar10-0.0/Cifar10CyclicLRAutoAugmentWideResNet4x22', ['APGD', 'APGDL2'])),
+#         ('R-Warp', (f'{log_root}/cifar10-0.0/Cifar10RetinaWarpCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGD', '5FixationAPGDL2'])),
+#         ('R-Blur', (f'{log_root}/cifar10-0.0/Cifar10NoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationAPGD', '5FixationAPGDL2'])),
+#         ('AT', (f'{log_root}/cifar10-0.008/Cifar10AdvTrainCyclicLRAutoAugmentWideResNet4x22', ['APGD', 'APGDL2'])),
+#     ])
+#     logdicts = get_logdict(plot_config)
+#     cifar10_df = create_data_df(logdicts, plot_config)
+
+#     plot_config = OrderedDict([
+#         ('ResNet', (f'{log_root}/ecoset10-0.0/Ecoset10CyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
+#         ('R-Warp', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD', '5FixationAPGDL2'])),
+#         ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD', '5FixationAPGDL2'])),
+#         ('AT', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
+#     ])
+#     logdicts = get_logdict(plot_config)
+#     ecost10_df = create_data_df(logdicts, plot_config)
+
+#     plot_config = OrderedDict([
+#         ('ResNet', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100CyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
+#         ('R-Warp', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100RetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD', '5FixationAPGDL2'])),
+#         ('R-Blur', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD', '5FixationAPGDL2'])),
+#         ('AT', (f'{log_root}/ecoset100_folder-0.008/Ecoset100AdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
+#     ])
+#     logdicts = get_logdict(plot_config)
+#     ecoset100_df = create_data_df(logdicts, plot_config)
+    
+#     low_eps = [0.002, 0.004]
+#     high_eps = [0.008, 0.016]
+#     for df, name in zip([cifar10_df, ecost10_df, ecoset100_df, ecoset_df], ['c10', 'e10', 'e100', 'e']):
+#         print(name)
+#         for method in df['Method'].unique():
+#             lo_acc_diff1 = df[(df['Method'] == 'R-Blur') & (df['Perturbation Distance ‖ϵ‖∞'] == low_eps[0])]['Accuracy'].values.mean() - df[(df['Method'] == method) & (df['Perturbation Distance ‖ϵ‖∞'] == low_eps[0])]['Accuracy'].values.mean()
+#             lo_acc_diff2 = df[(df['Method'] == 'R-Blur') & (df['Perturbation Distance ‖ϵ‖∞'] == low_eps[1])]['Accuracy'].values.mean() - df[(df['Method'] == method) & (df['Perturbation Distance ‖ϵ‖∞'] == low_eps[1])]['Accuracy'].values.mean()
+#             avg_lo_acc_diff = (lo_acc_diff1+lo_acc_diff2)/2
+
+#             hi_acc_diff1 = df[(df['Method'] == 'R-Blur') & (df['Perturbation Distance ‖ϵ‖∞'] == high_eps[0])]['Accuracy'].values.mean() - df[(df['Method'] == method) & (df['Perturbation Distance ‖ϵ‖∞'] == high_eps[0])]['Accuracy'].values.mean()
+#             hi_acc_diff2 = df[(df['Method'] == 'R-Blur') & (df['Perturbation Distance ‖ϵ‖∞'] == high_eps[1])]['Accuracy'].values.mean() - df[(df['Method'] == method) & (df['Perturbation Distance ‖ϵ‖∞'] == high_eps[1])]['Accuracy'].values.mean()
+#             avg_hi_acc_diff = (hi_acc_diff1+hi_acc_diff2)/2
+#             print(method, (lo_acc_diff1, lo_acc_diff2), (hi_acc_diff1, hi_acc_diff2), avg_lo_acc_diff, avg_hi_acc_diff)
+
+# def bar():
+#     plot_config = OrderedDict([
+#         ('ResNet', (f'{log_root}/cifar10-0.0/Cifar10CyclicLRAutoAugmentWideResNet4x22', ['CCAPGD'])),
+#         ('R-Warp', (f'{log_root}/cifar10-0.0/Cifar10RetinaWarpCyclicLRAutoAugmentWideResNet4x22', ['5FixationCCAPGD'])),
+#         ('R-Blur', (f'{log_root}/cifar10-0.0/Cifar10NoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22', ['5FixationCCAPGD'])),
+#         ('AT', (f'{log_root}/cifar10-0.008/Cifar10AdvTrainCyclicLRAutoAugmentWideResNet4x22', ['CCAPGD'])),
+#     ])
+#     cifar10_df = load_cc_results(plot_config, '/home/mshah1/workhorse3/cifar-10-batches-py/distorted/test_img_ids_and_labels.csv')
+
+#     plot_config = OrderedDict([
+#             ('ResNet', (f'{log_root}/ecoset10-0.0/Ecoset10CyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+#             # ('GBlur (σ=10.5)', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
+#             ('R-Warp', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+#             ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+#             # ('G-Noise', (f'{log_root}/ecoset10-0.0/Ecoset10GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+#             ('AT', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+#         ])
+#     ecoset10_df = load_cc_results(plot_config, '/home/mshah1/workhorse3/ecoset-10/distorted/val_img_paths_and_labels.csv')
+
+#     plot_config = OrderedDict([
+#             ('ResNet', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100CyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+#             # ('GBlur (σ=10.5)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianBlurCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+#             ('R-Warp', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100RetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+#             ('R-Blur', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+#             # ('G-Noise', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+#             ('AT', (f'{log_root}/ecoset100_folder-0.008/Ecoset100AdvTrainCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+#         ])
+#     ecoset100_df = load_cc_results(plot_config, '/home/mshah1/workhorse3/ecoset-100/distorted/test_img_paths_and_labels.csv')
+
+#     plot_config = OrderedDict([
+#             ('ResNet', (f'{log_root}/ecoset-0.0/EcosetCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+#             ('R-Warp', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+#             ('R-Blur', (f'{log_root}/ecoset-0.0/EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationCCAPGD'])),
+#             # ('G-Noise', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+#             ('AT', (f'{log_root}/ecoset-0.008/EcosetAdvTrainCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
+#         ])
+#     ecoset_df = load_cc_results(plot_config, '/home/mshah1/workhorse3/ecoset/distorted/test_img_paths_and_labels-536K.csv')
+
+#     low_eps = [1,2]
+#     high_eps = [4,5]
+#     for df, name in zip([cifar10_df, ecoset10_df, ecoset100_df, ecoset_df], ['c10', 'e10', 'e100', 'e']):
+#         print(name)
+#         for method in df['Method'].unique():
+#             lo_acc_diff1 = df[(df['Method'] == 'R-Blur') & (df['Corruption Severity'] == low_eps[0])]['Accuracy'].values.mean() - df[(df['Method'] == method) & (df['Corruption Severity'] == low_eps[0])]['Accuracy'].values.mean()
+#             lo_acc_diff2 = df[(df['Method'] == 'R-Blur') & (df['Corruption Severity'] == low_eps[1])]['Accuracy'].values.mean() - df[(df['Method'] == method) & (df['Corruption Severity'] == low_eps[1])]['Accuracy'].values.mean()
+#             avg_lo_acc_diff = (lo_acc_diff1+lo_acc_diff2)/2
+
+#             hi_acc_diff1 = df[(df['Method'] == 'R-Blur') & (df['Corruption Severity'] == high_eps[0])]['Accuracy'].values.mean() - df[(df['Method'] == method) & (df['Corruption Severity'] == high_eps[0])]['Accuracy'].values.mean()
+#             hi_acc_diff2 = df[(df['Method'] == 'R-Blur') & (df['Corruption Severity'] == high_eps[1])]['Accuracy'].values.mean() - df[(df['Method'] == method) & (df['Corruption Severity'] == high_eps[1])]['Accuracy'].values.mean()
+#             avg_hi_acc_diff = (hi_acc_diff1+hi_acc_diff2)/2
+#             print(method, avg_lo_acc_diff, avg_hi_acc_diff)
+# # foo()
+# bar()
+#     # Perturbation Distance ‖ϵ‖∞
+#     # Perturbation Distance ‖ϵ‖2
