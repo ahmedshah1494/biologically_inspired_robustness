@@ -18,6 +18,7 @@ from einops import rearrange
 from fastai.layers import ResBlock
 
 from adversarialML.biologically_inspired_models.src.wide_resnet import Wide_ResNet
+from adversarialML.biologically_inspired_models.src.FoveatedTextureTransform.model_arch import vgg11_tex_fov
 @define(slots=False)
 class CommonModelParams:
     input_size: Union[int, List[int]] = None
@@ -1318,6 +1319,34 @@ class LogitAverageEnsembler(AbstractModel):
             x = rearrange(x, '(b n) c -> b n c', n=self.params.n)
         x = x.mean(1)
         return x
+    
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        loss = nn.functional.cross_entropy(logits, y)
+        output = (loss,)
+        if return_logits:
+            output = (logits,) + output
+        return output
+
+class FovTexVGG(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        common_params: CommonModelParams = field(factory=CommonModelParams)
+        scale: str = '0.4'
+        num_classes: int = None
+        permutation: str = None
+
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.params = params
+        self._make_network()
+
+    def _make_network(self):
+        self.vgg = vgg11_tex_fov(self.params.scale, self.params.common_params.input_size[1], 
+                                    self.params.num_classes, self.params.permutation)
+
+    def forward(self, x):
+        return self.vgg(x)
     
     def compute_loss(self, x, y, return_logits=True):
         logits = self.forward(x)
