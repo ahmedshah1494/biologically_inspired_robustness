@@ -61,6 +61,7 @@ if __name__ == '__main__':
     parser.add_argument('--center_fixation', action='store_true')
     parser.add_argument('--five_fixations', action='store_true')
     parser.add_argument('--disable_retina', action='store_true')
+    parser.add_argument('--use_common_corruption_testset', action='store_true')
     parser.add_argument('--add_fixed_noise_patch', action='store_true')
     parser.add_argument('--view_scale', type=int, default=None)
     parser.add_argument('--use_lightning_lite', action='store_true')
@@ -89,7 +90,8 @@ if __name__ == '__main__':
                                                     args.eps_list, center_fixation=args.center_fixation,
                                                     five_fixation_ensemble=args.five_fixations, 
                                                     view_scale=args.view_scale, disable_retina=args.disable_retina,
-                                                    add_fixed_noise_patch=args.add_fixed_noise_patch
+                                                    add_fixed_noise_patch=args.add_fixed_noise_patch, 
+                                                    use_common_corruption_testset=args.use_common_corruption_testset
                                                     )()
         runner_cls = AdversarialAttackBatteryRunner
         runner_kwargs = {

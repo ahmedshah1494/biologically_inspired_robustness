@@ -2,9 +2,10 @@ from copy import deepcopy
 import os
 from time import time
 from attrs import define, asdict
-from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, SupportedBackend
+from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, SupportedBackend, AbstractAttackConfig
 from mllib.runners.configs import BaseExperimentConfig
 import torch
+import torchvision
 
 from trainers import RandomizedSmoothingEvaluationTrainer, MultiAttackEvaluationTrainer
 from mllib.datasets.dataset_factory import ImageDatasetFactory, SupportedDatasets
@@ -171,7 +172,7 @@ def setup_for_five_fixation_evaluation(p: BaseParameters):
 
 def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, test_eps=[0.0, 0.016, 0.024, 0.032, 0.048, 0.064], 
                                 center_fixation=False, five_fixation_ensemble=False, view_scale=None, disable_retina=False, 
-                                add_fixed_noise_patch=False):
+                                add_fixed_noise_patch=False, use_common_corruption_testset=False):
     class AdversarialAttackBatteryEvalTask(task_cls):
         _cls = task_cls
         def get_dataset_params(self):
@@ -180,6 +181,20 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                 p.dataset = SupportedDatasets.ECOSET_FOLDER
                 p.datafolder = os.path.dirname(os.path.dirname(p.datafolder))
                 p.max_num_train = 10000
+            if use_common_corruption_testset:
+                if p.dataset == SupportedDatasets.ECOSET10:
+                    p.dataset = SupportedDatasets.ECOSET10C_FOLDER
+                    p.datafolder = os.path.join(os.path.dirname(os.path.dirname(p.datafolder)), 'distorted')
+                if p.dataset == SupportedDatasets.ECOSET100_FOLDER:
+                    p.dataset = SupportedDatasets.ECOSET100C_FOLDER
+                    p.datafolder = os.path.join(p.datafolder, 'distorted')
+                if p.dataset == SupportedDatasets.ECOSET_FOLDER:
+                    p.dataset = SupportedDatasets.ECOSETC_FOLDER
+                    p.datafolder = '/home/mshah1/workhorse3/ecoset/distorted'
+                if p.dataset == SupportedDatasets.CIFAR10:
+                    p.dataset = SupportedDatasets.CIFAR10C
+                    p.datafolder = '/home/mshah1/workhorse3/cifar-10-batches-py/distorted'
+
             p.max_num_test = num_test
             return p
         
@@ -205,6 +220,8 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
             adv_config.training_attack_params = None
             atk_params = []
             for name, atkfn in atk_param_fns.items():
+                if use_common_corruption_testset:
+                    name = 'CC'+name
                 if disable_retina:
                     name = f'NoRetina'+name
                 else:
