@@ -296,18 +296,29 @@ def update_and_save_logs(logdir, outfilename, load_fn, write_fn, save_fn, *save_
     else:
         save_fn(*save_fn_args, **save_fn_kwargs)
 
+def save_pred_and_label_csv(logdir, outfile, preds, labels):
+    for atkname in preds.keys():
+        with open(os.path.join(logdir, f'{atkname}_{outfile}'), 'w') as f:
+            f.write('L,P\n')
+            for p,l in zip(preds[atkname], labels):
+                f.write(f'{l},{p}\n')
+
 class MultiAttackEvaluationTrainer(AdversarialTrainer):
     def __init__(self, params, *args, **kwargs):
         super().__init__(params, *args, **kwargs)
         self.metrics_filename = 'adv_metrics.json'
         self.data_and_pred_filename = 'adv_data_and_preds.pkl'
         self.per_sample_logdir = os.path.join(self.logdir, 'per_sample_adv_attack_results')
+        self.per_attack_logdir = os.path.join(self.logdir, 'per_attack_results')
         if not os.path.exists(self.per_sample_logdir):
             os.makedirs(self.per_sample_logdir)
+        if not os.path.exists(self.per_attack_logdir):
+            os.makedirs(self.per_attack_logdir)
 
     def save_logs_after_test(self, train_metrics, test_outputs):
         update_and_save_logs(self.logdir, self.metrics_filename, load_json, write_json, self.save_training_logs, 
                                 train_metrics['train_accuracy'], test_outputs['test_acc'])
+        save_pred_and_label_csv(self.per_attack_logdir, 'label_and_preds.csv', test_outputs['preds'], test_outputs['labels'])
         update_and_save_logs(self.logdir, self.data_and_pred_filename, load_pickle, write_pickle, self.save_data_and_preds,
                                 test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
         # self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
@@ -378,7 +389,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             test_acc[atk_name] = acc
             test_logits[atk_name] = logits.numpy()
             target_labels[atk_name] = y_tgt.detach().cpu().numpy().tolist()
-            # self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
+            self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
         return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels, 'logits': test_logits}, metrics
     
@@ -440,7 +451,7 @@ class RandomizedSmoothingEvaluationTrainer(_Trainer):
             _preds = []
             _radii = []
             for i,(y_,x_) in tqdm(enumerate(zip(y, x))):
-                if i < 94:
+                if (i < 0) or (i > 100):
                     print(f'skipping {i}')
                     continue
                 p,r = self._single_sample_step(smoothed_model, x_)
