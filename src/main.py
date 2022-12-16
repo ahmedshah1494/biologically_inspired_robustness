@@ -60,6 +60,7 @@ if __name__ == '__main__':
     parser.add_argument('--output_to_task_logdir', action='store_true')
     parser.add_argument('--center_fixation', action='store_true')
     parser.add_argument('--five_fixations', action='store_true')
+    parser.add_argument('--hscan_fixations', action='store_true')
     parser.add_argument('--disable_retina', action='store_true')
     parser.add_argument('--use_common_corruption_testset', action='store_true')
     parser.add_argument('--add_fixed_noise_patch', action='store_true')
@@ -89,6 +90,7 @@ if __name__ == '__main__':
                                                    {k:v for k,v in attacks.items() if k in args.attacks},
                                                     args.eps_list, center_fixation=args.center_fixation,
                                                     five_fixation_ensemble=args.five_fixations, 
+                                                    hscan_fixation_ensemble=args.hscan_fixations,
                                                     view_scale=args.view_scale, disable_retina=args.disable_retina,
                                                     add_fixed_noise_patch=args.add_fixed_noise_patch, 
                                                     use_common_corruption_testset=args.use_common_corruption_testset
