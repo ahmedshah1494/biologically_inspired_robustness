@@ -16,6 +16,7 @@ from adversarialML.biologically_inspired_models.src.supconloss import SupConLoss
 from fastai.vision.models.xresnet import xresnet34, xresnet18, xresnet50
 from einops import rearrange
 from fastai.layers import ResBlock
+from adversarialML.biologically_inspired_models.src.cornet_s import CORnet_S
 
 from adversarialML.biologically_inspired_models.src.wide_resnet import Wide_ResNet
 from adversarialML.biologically_inspired_models.src.FoveatedTextureTransform.model_arch import vgg11_tex_fov
@@ -922,6 +923,19 @@ class GeneralClassifier(AbstractModel):
         else:
             self.logit_ensembler = nn.Identity()
         self.loss_fn = self.params.loss_fn()
+
+    def _get_feats(self, x):
+        r = self.feature_model.forward(x)
+        if isinstance(r, tuple):
+            r = r[0]
+        return r
+    
+    def _run_classifier(self, x):
+        logits = self.classifier(x)
+        if isinstance(logits, tuple):
+            logits = logits[0]
+        logits = self.logit_ensembler(logits)
+        return logits
     
     def forward(self, x, *fwd_args, **fwd_kwargs):
         y = self.feature_model.forward(x, *fwd_args, **fwd_kwargs)
@@ -1212,7 +1226,9 @@ class XResNet34(AbstractModel):
         setup_feature_extraction: bool = False
         setup_classification: bool = True
         num_classes: int = None
+        kernel_size: int = 3
         widen_factor: int = 1.
+        widen_stem: bool = False
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -1224,7 +1240,9 @@ class XResNet34(AbstractModel):
                                 c_in=self.params.common_params.input_size[0],
                                 n_out=self.params.common_params.num_units,
                                 act_cls=self.params.common_params.activation,
-                                widen=self.params.widen_factor
+                                widen=self.params.widen_factor,
+                                stem_szs=(32,32,64) if not self.params.widen_stem else (self.params.widen_factor*32,self.params.widen_factor*32,64),
+                                ks=self.params.kernel_size
                             )
         resnet[-1] = nn.Identity()
         return resnet
@@ -1248,7 +1266,10 @@ class XResNet34(AbstractModel):
         return self.classifier(x)
     
     def forward(self, x):
-        return self._run_classifier(self._get_feats(x))
+        x = self._get_feats(x)
+        if self.params.setup_classification:
+            x =  self._run_classifier(x)
+        return x
     
     def compute_loss(self, x, y, return_logits=True):
         logits = self.forward(x)
@@ -1256,6 +1277,8 @@ class XResNet34(AbstractModel):
             loss = nn.functional.cross_entropy(logits, y)
         else:
             loss = torch.tensor(0., device=x.device)
+        # if self.training:
+        #     print(logits[:2], loss)
         output = (loss,)
         if return_logits:
             output = (logits,) + output
@@ -1267,7 +1290,9 @@ class XResNet18(XResNet34):
                                 c_in=self.params.common_params.input_size[0],
                                 n_out=self.params.common_params.num_units,
                                 act_cls=self.params.common_params.activation,
-                                widen=self.params.widen_factor
+                                widen=self.params.widen_factor,
+                                stem_szs=(32,32,64) if not self.params.widen_stem else (self.params.widen_factor*32,self.params.widen_factor*32,64),
+                                ks=self.params.kernel_size
                             )
         resnet[-1] = nn.Identity()
         return resnet
@@ -1278,9 +1303,25 @@ class XResNet50(XResNet34):
                                 c_in=self.params.common_params.input_size[0],
                                 n_out=self.params.common_params.num_units,
                                 act_cls=self.params.common_params.activation,
-                                widen=self.params.widen_factor
+                                widen=self.params.widen_factor,
+                                stem_szs=(32,32,64) if not self.params.widen_stem else (self.params.widen_factor*32,self.params.widen_factor*32,64),
+                                ks=self.params.kernel_size
                             )
         resnet[-1] = nn.Identity()
+        return resnet
+
+class CORnetS(XResNet34):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        common_params: CommonModelParams = field(factory=CommonModelParams)
+        normalization_layer_params: BaseParameters = None
+        setup_feature_extraction: bool = False
+        setup_classification: bool = True
+        num_classes: int = None
+        num_recurrence: List[int] = [2,4,2]
+
+    def _make_resnet(self):
+        resnet = CORnet_S(times=self.params.num_recurrence)
         return resnet
 
 class WideResnet(XResNet34):
@@ -1299,6 +1340,7 @@ class LogitAverageEnsembler(AbstractModel):
     class ModelParams(BaseParameters):
         n: int = None
         activation: nn.Module = nn.Identity
+        reduction: str = 'mean'
     
     def __init__(self, params: BaseParameters) -> None:
         super().__init__(params)
@@ -1317,7 +1359,10 @@ class LogitAverageEnsembler(AbstractModel):
             warnings.warn(w)
         else:
             x = rearrange(x, '(b n) c -> b n c', n=self.params.n)
-        x = x.mean(1)
+        if self.params.reduction == 'mean':
+            x = x.mean(1)
+        elif self.params.reduction == 'logsumexp':
+            x = torch.logsumexp(x, 1)
         return x
     
     def compute_loss(self, x, y, return_logits=True):
