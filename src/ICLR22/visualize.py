@@ -1058,6 +1058,36 @@ def plot_ecoset_cc_results():
 #     plt.savefig(os.path.join(outdir, 'training_ablation_acc_bar_l2.png'))
 #     plt.close()
 
+def plot_ecoset10_new_rblur_pgdinf_results():
+    new_log_root = '/share/workhorse3/mshah1/biologically_inspired_models/logs'
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/ecoset10-0.0/Ecoset10CyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('R-Blur-old-5F', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('R-Blur-new-5F', (f'{new_log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlur2S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('R-Blur-old-5F-DN', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationDetNoiseAPGD'])),
+        ('R-Blur-new-5F-DN', (f'{new_log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlur2S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationDetNoiseAPGD'])),
+        ('R-Blur-old-CF', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
+        ('R-Blur-new-CF', (f'{new_log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlur2S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredAPGD'])),
+        ('R-Blur-old-CF-DN', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredDetNoiseAPGD'])),
+        ('R-Blur-new-CF-DN', (f'{new_log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlur2S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['CenteredDetNoiseAPGD'])),
+        ('AT', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+    ])
+
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
+    sns.set_style("whitegrid")
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] <= 0.004])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
+    plt.legend([],[], frameon=False)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_new_rblur_linf.png'))
+    plt.close()
+
+
 # plot_cifar10_pgdinf_results()
 # plot_cifar10_pgdl2_results()
 # plot_ecoset10_pgdinf_results()
@@ -1083,7 +1113,7 @@ def plot_ecoset_cc_results():
 # plot_cifar10_pgdinf_atrblur_results()
 
 # plot_ecoset10_pgdinf_results2()
-plot_ecoset10_pgdinf_vit_results()
+# plot_ecoset10_pgdinf_vit_results()
 # plot_ecoset10_pgdinf_mlpmixer_results()
 
 # plot_ecoset10_pgdl2_results2()
@@ -1097,6 +1127,8 @@ plot_ecoset10_pgdinf_vit_results()
 # plot_ecoset10_cc_results()
 # plot_ecoset100_cc_results()
 # plot_ecoset_cc_results()
+
+plot_ecoset10_new_rblur_pgdinf_results()
 
 # def foo():
 #     plot_config = OrderedDict([
