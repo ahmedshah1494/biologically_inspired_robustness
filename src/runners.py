@@ -57,7 +57,10 @@ class AdversarialExperimentRunner(BaseRunner):
             if self.ckp_pth is None:
                 self.ckp_pth = getattr(ep, 'seed_model_path', None)
             src_model = self.load_model()
-            model = load_params_into_model(src_model, model, getattr(ep, 'keys_to_skip_regex', None), getattr(ep, 'keys_to_freeze_regex', None))
+            if self.load_model_from_ckp:
+                model = load_params_into_model(src_model, model)
+            else:
+                model = load_params_into_model(src_model, model, getattr(ep, 'keys_to_skip_regex', None), getattr(ep, 'keys_to_freeze_regex', None))
         print_num_params(model)
         return model
     
