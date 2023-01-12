@@ -7,7 +7,7 @@ from mllib.runners.configs import BaseExperimentConfig
 import torch
 import torchvision
 
-from trainers import RandomizedSmoothingEvaluationTrainer, MultiAttackEvaluationTrainer
+from trainers import RandomizedSmoothingEvaluationTrainer, MultiAttackEvaluationTrainer, AnnotatedMultiAttackEvaluationTrainer, ManyFixationsEvaluationTrainer
 from mllib.datasets.dataset_factory import ImageDatasetFactory, SupportedDatasets
 
 from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter, GaussianNoiseLayer
@@ -180,23 +180,37 @@ def set_general_classifier_param(p: BaseParameters, param, value):
                         set_general_classifier_param(x, param, value)
     return p
 
+def set_param(p:BaseParameters, param, value):
+    if hasattr(p, param):
+        setattr(p, param, value)
+    else:
+        d = p.asdict(recurse=False)
+        for v in d.values():
+            if isinstance(v, BaseParameters):
+                set_param(v, param, value)
+            elif np.iterable(v):
+                for x in v:
+                    if isinstance(x, BaseParameters):
+                        set_param(x, param, value)
+    return p
+
 def setup_for_five_fixation_evaluation(p: BaseParameters):
     ensembler_params = LogitAverageEnsembler.ModelParams(LogitAverageEnsembler, n=5)
-    set_general_classifier_param(p, 'logit_ensembler_params', ensembler_params)
+    set_param(p, 'logit_ensembler_params', ensembler_params)
     set_retina_loc_mode(p, 'five_fixations')
     print(p)
     return p
 
 def setup_for_hscan_fixation_evaluation(p: BaseParameters):
     ensembler_params = LogitAverageEnsembler.ModelParams(LogitAverageEnsembler, n=5)
-    set_general_classifier_param(p, 'logit_ensembler_params', ensembler_params)
+    set_param(p, 'logit_ensembler_params', ensembler_params)
     set_retina_loc_mode(p, 'hscan_fixations')
     print(p)
     return p
 
 def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, test_eps=[0.0, 0.016, 0.024, 0.032, 0.048, 0.064], 
                                 center_fixation=False, five_fixation_ensemble=False, hscan_fixation_ensemble=False, view_scale=None, disable_retina=False, 
-                                add_fixed_noise_patch=False, use_common_corruption_testset=False):
+                                add_fixed_noise_patch=False, use_common_corruption_testset=False, disable_reconstruction=False, use_residual_img=False):
     class AdversarialAttackBatteryEvalTask(task_cls):
         _cls = task_cls
         def get_dataset_params(self):
@@ -236,6 +250,10 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                     p = setup_for_five_fixation_evaluation(p)
                 elif hscan_fixation_ensemble:
                     p = setup_for_hscan_fixation_evaluation(p)
+            if disable_reconstruction:
+                p = set_param(p, 'no_reconstruction', True)
+            if use_residual_img:
+                p = set_param(p, 'use_residual_during_inference', True)
             return p
 
         def get_experiment_params(self) -> BaseExperimentConfig:
@@ -248,6 +266,10 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
             for name, atkfn in atk_param_fns.items():
                 if use_common_corruption_testset:
                     name = 'CC'+name
+                if disable_reconstruction:
+                    name = f'NoRecon'+name
+                if use_residual_img:
+                    name = 'ResidualImg'+name
                 if disable_retina:
                     name = f'NoRetina'+name
                 else:
