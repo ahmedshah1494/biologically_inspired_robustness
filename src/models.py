@@ -13,13 +13,14 @@ import torchvision
 
 from adversarialML.biologically_inspired_models.src.model_utils import _make_first_dim_last, _make_last_dim_first, merge_strings, mm, str_to_act_and_dact_fn, _compute_conv_output_shape
 from adversarialML.biologically_inspired_models.src.supconloss import SupConLoss, AngularSupConLoss
-from fastai.vision.models.xresnet import xresnet34, xresnet18, xresnet50
+from fastai.vision.models.xresnet import xresnet34, xresnet18, xresnet50, XResNet
 from einops import rearrange
 from fastai.layers import ResBlock
 from adversarialML.biologically_inspired_models.src.cornet_s import CORnet_S
 
 from adversarialML.biologically_inspired_models.src.wide_resnet import Wide_ResNet
 from adversarialML.biologically_inspired_models.src.FoveatedTextureTransform.model_arch import vgg11_tex_fov
+from matplotlib import pyplot as plt
 @define(slots=False)
 class CommonModelParams:
     input_size: Union[int, List[int]] = None
@@ -809,8 +810,8 @@ class SequentialLayers(AbstractModel, CommonModelMixin):
         else:
             return out
     
-    def compute_loss(self, x, y, return_logits=True):
-        out = self.forward(x)
+    def compute_loss(self, x, y, return_logits=True, **fwd_kwargs):
+        out = self.forward(x, **fwd_kwargs)
         if isinstance(out, tuple):
             logits = out[0]
             loss = out[1][0]
@@ -1265,13 +1266,13 @@ class XResNet34(AbstractModel):
     def _run_classifier(self, x):
         return self.classifier(x)
     
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         x = self._get_feats(x)
         if self.params.setup_classification:
             x =  self._run_classifier(x)
         return x
     
-    def compute_loss(self, x, y, return_logits=True):
+    def compute_loss(self, x, y, return_logits=True, **kwargs):
         logits = self.forward(x)
         if self.params.setup_classification:
             loss = nn.functional.cross_entropy(logits, y)
@@ -1400,3 +1401,326 @@ class FovTexVGG(AbstractModel):
         if return_logits:
             output = (logits,) + output
         return output
+
+class XResNetClassifierWithReconstructionLoss(XResNet18):
+    @define(slots=False)
+    class ModelParams(XResNet18.ModelParams):
+        preprocessing_params: BaseParameters = None
+        recon_wt: float = 1.
+        cls_wt: float = 1.
+        feature_layer_idx: int = -1
+        logit_ensembler_params: BaseParameters = None
+
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.params = params
+        params.setup_classification = params.setup_feature_extraction = True
+        self._make_network()
+
+    def _make_reconstructor(self):
+        isz = self.params.common_params.input_size
+        shapes = [(1, *isz)]
+        isz = shapes[-1]
+        for i, block in enumerate(self.resnet):
+            if i <= self.params.feature_layer_idx:
+                x = torch.rand(*isz)
+                x = block(x)
+                isz = x.shape
+                shapes.append(isz)
+        recon_layers = []
+        self.combiners = nn.ModuleList([])
+        for i in range(len(shapes)-1, 0, -1):
+            s = shapes[i-1][2]//shapes[i][2]
+            l = nn.ConvTranspose2d(shapes[i][1], shapes[i-1][1], 3, s, 1, int(s > 1))
+            # l = nn.Conv2d(shapes[i][1], shapes[i-1][1]*(s**2), 3, 1, 1)
+            # if s > 1:
+            #     l = nn.Sequential(l, nn.PixelShuffle(s))
+            x = l(x)
+            recon_layers.append(l)
+            if i < len(shapes)-1:
+                c = nn.Conv2d(2*shapes[i][1], shapes[i][1], 1, 1, 0)
+                self.combiners.append(c)
+        self.reconstructor = nn.Sequential(*recon_layers)
+    
+    def _make_network(self):
+        super()._make_network()
+        if self.params.preprocessing_params is None:
+            self.preprocessor = nn.Identity()
+        else:
+            self.preprocessor = self.params.preprocessing_params.cls(self.params.preprocessing_params)
+        self._make_reconstructor()
+        if self.params.logit_ensembler_params is not None:
+            self.logit_ensembler = self.params.logit_ensembler_params.cls(self.params.logit_ensembler_params)
+        else:
+            self.logit_ensembler = nn.Identity()
+    
+    def preprocess(self, x):
+        x = self.preprocessor(x)
+        if isinstance(x, tuple):
+            x = x[0]
+        return x
+    
+    def _get_feats_(self, x, return_interm_activations=False, **kwargs):
+        x = self.normalization_layer(x)
+        feats = []
+        for i,l in enumerate(self.resnet):
+            if i <= self.params.feature_layer_idx:
+                x = l(x)
+                feats.append(x)
+        if return_interm_activations:
+            return x, feats
+        return x
+    
+    def _get_feats(self, x, return_interm_activations=False, **kwargs):
+        x = self.preprocess(x)
+        return self._get_feats_(x, return_interm_activations=return_interm_activations, **kwargs)
+    
+    def _run_classifier(self, x):
+        for i,l in enumerate(self.resnet):
+            if i > self.params.feature_layer_idx:
+                x = l(x)
+        logits = self.classifier(x)
+        logits = self.logit_ensembler(logits)
+        return logits
+
+    def forward_and_reconstruct(self, x):
+        x = self.preprocess(x)
+        feats, all_feats = self._get_feats_(x, return_interm_activations=True)
+        if self.params.recon_wt > 0:
+            all_feats = all_feats[::-1]
+            for i,l in enumerate(self.reconstructor):
+                f = all_feats[i]
+                if i > 0:
+                    f = torch.relu(self.combiners[i-1](torch.cat([r, f], 1)))
+                r = l(f)
+                if i < (len(self.reconstructor)-1):
+                    r = torch.relu(r)
+        else:
+            r = torch.zeros_like(x)
+        if self.params.cls_wt > 0:
+            logits = self._run_classifier(feats)
+        else:
+            logits = torch.zeros((x.shape[0], self.params.num_classes), dtype=x.dtype, device=x.device)
+        plt.subplot(1,2,1)
+        plt.imshow(convert_image_tensor_to_ndarray(x[0]))
+        plt.subplot(1,2,2)
+        plt.imshow(convert_image_tensor_to_ndarray(r[0]))
+        plt.savefig('recon2.png')
+        return logits, r
+    
+    def compute_loss(self, x, y, return_logits=True):
+        if (self.params.recon_wt > 0):# and self.training:
+            logits, recon = self.forward_and_reconstruct(x)
+            rloss = torch.pow(x.reshape(x.shape[0],-1) - recon.reshape(recon.shape[0],-1), 2).mean()
+        else:
+            logits = self.forward(x)
+            rloss = 0
+        closs = nn.functional.cross_entropy(logits, y)
+        loss = self.params.cls_wt * closs + self.params.recon_wt * rloss
+        if return_logits:
+            return logits, loss
+        return loss
+
+def convert_image_tensor_to_ndarray(img):
+    return img.cpu().detach().transpose(0,1).transpose(1,2).numpy()
+
+class XResNetClassifierWithEnhancer(XResNetClassifierWithReconstructionLoss):
+    @define(slots=False)
+    class ModelParams(XResNetClassifierWithReconstructionLoss.ModelParams):
+        no_reconstruction: bool = False
+        use_residual_during_inference: bool = False
+
+    def _make_reconstructor(self):
+        self.multi_scale_conv = nn.ModuleList([
+            nn.Conv2d(3, 32, 9, 4, 4),
+            nn.Conv2d(3, 32, 7, 4, 3),
+            nn.Conv2d(3, 32, 5, 4, 2),
+        ])
+        self.bnrelu = nn.Sequential(
+            nn.BatchNorm2d(96),
+            nn.ReLU()
+        )
+        self.reconstructor = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(96, 64, 5, 1, 2),
+                nn.BatchNorm2d(64),
+                nn.ReLU()
+            ),
+            nn.Sequential(
+                nn.Conv2d(160, 64, 1, 1),
+                nn.ReLU(),
+                nn.Conv2d(64, 3*16, 5, 1, 2),
+                nn.PixelShuffle(4)
+            ),
+        ])
+
+    def reconstruct(self, x):
+        z1 = self.bnrelu(torch.cat([l(x) for l in self.multi_scale_conv],1))
+        z2 = self.reconstructor[0](z1)
+        # z2 = self.reconstructor[1](z1)
+        r = self.reconstructor[1](torch.cat((z1,z2), 1))
+        return r
+    
+    def _get_feats(self, x, return_interm_activations=False, return_reconstruction=False, **kwargs):
+        xp = self.preprocess(x)
+        if self.params.no_reconstruction:
+            r = xp
+        else:
+            r = self.reconstruct(xp)
+        if self.params.use_residual_during_inference and (not self.training):
+            x = (x - r)
+        # plt.subplot(1,2,1)
+        # plt.imshow(convert_image_tensor_to_ndarray(x[0]))
+        # plt.subplot(1,2,2)
+        # plt.imshow(convert_image_tensor_to_ndarray(r[0]))
+        # plt.savefig('recon2.png')
+        
+        out = self._get_feats_(r, return_interm_activations=return_interm_activations, **kwargs)
+        if return_reconstruction:
+            if isinstance(out, tuple):
+                out = out + (r,)
+            else:
+                out = (out, r)
+        return out
+    
+    def forward_and_reconstruct(self, x):
+        f, r = self._get_feats(x, return_reconstruction=True)
+        if self.params.cls_wt > 0:
+            logits = self._run_classifier(f)
+        else:
+            logits = torch.zeros((x.shape[0], self.params.num_classes), dtype=x.dtype, device=x.device)
+        return logits, r
+
+import torch
+import torch.nn as nn
+
+class ResidualBlock(nn.Module):
+    def __init__(self, num_channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(num_channels, num_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(num_channels)
+        self.conv2 = nn.Conv2d(num_channels, num_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(num_channels)
+
+    def forward(self, x):
+        out = torch.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += x
+        return out
+
+class DnCNN(nn.Module):
+    def __init__(self, num_channels, num_resblocks):
+        super().__init__()
+        # define the layers of the DnCNN
+        self.conv1 = nn.Conv2d(num_channels, 64, kernel_size=3, padding=1)
+        self.resblocks = nn.Sequential(
+            *[ResidualBlock(64) for _ in range(num_resblocks)]
+        )
+        self.conv2 = nn.Conv2d(64, num_channels, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        # apply the convolutional layers and ReLU activation function
+        x = torch.relu(self.conv1(x))
+        x = self.resblocks(x)
+        x = self.conv2(x)
+        return x
+
+class XResNetClassifierWithDeepResidualEnhancer(XResNetClassifierWithEnhancer):
+    @define(slots=False)
+    class ModelParams(XResNetClassifierWithEnhancer.ModelParams):
+        perceptual_loss: bool = False
+        ploss_cnn_layer_idx: int = 12
+        resnet_ckp_path: str = None
+        reconstructor_ckp_path: str = None
+
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
+        if params.resnet_ckp_path is not None:
+            load_params_into_model(torch.load(params.resnet_ckp_path), self, r'(.*convs.*|.*multi_scale_conv.*|.*bnrelu.*|.*upsample.*)')
+        if params.reconstructor_ckp_path is not None:
+            load_params_into_model(torch.load(params.reconstructor_ckp_path), self, r'(.*resnet.*)')
+
+    def _make_reconstructor(self):
+        bnrelu = lambda c : nn.Sequential(nn.BatchNorm2d(c),nn.ReLU())
+        convbnrelu = lambda ci, co, k, s, p: nn.Sequential(nn.Conv2d(ci, co, k, s, p),bnrelu(co))
+    #     self.reconstructor = nn.Sequential(
+    #         convbnrelu(3, 128, 15, 2, 7),
+    #         convbnrelu(128, 320, 1, 1, 0),
+    #         convbnrelu(320, 320, 1, 1, 0),
+    #         convbnrelu(320, 320, 3, 2, 1),
+    #         convbnrelu(320, 128, 1, 1, 0),
+    #         convbnrelu(128, 128, 3, 1, 1),
+    #         convbnrelu(128, 512, 1, 1, 0),
+    #         convbnrelu(512, 48*4, 5, 1, 2),
+    #         nn.PixelShuffle(2),
+    #         convbnrelu(48, 96, 3, 1, 1),
+    #         nn.Conv2d(96, 3*4, 5, 1, 2),
+    #         nn.PixelShuffle(2)
+    #     )
+    
+    # def reconstruct(self, x):
+    #     return self.reconstructor(x)
+
+        self.multi_scale_conv = nn.ModuleList([
+            nn.Conv2d(3, 256, 13, 2, 6),
+            # nn.Conv2d(3, 64, 9, 2, 4),
+            # nn.Conv2d(3, 64, 7, 2, 3),
+            # nn.Conv2d(3, 64, 5, 2, 2),
+        ])
+        self.bnrelu = nn.Sequential(
+            nn.BatchNorm2d(256),
+            nn.ReLU()
+        )
+        self.convs = nn.Sequential(
+            convbnrelu(256, 64, 3, 1, 1),
+            convbnrelu(64, 64, 3, 1, 1),
+            *(8*[convbnrelu(128, 64, 3, 1, 1)]),
+        )
+        self.upsample = nn.Sequential(
+            convbnrelu(128, 32*4, 3, 1, 1),
+            nn.PixelShuffle(2),
+            convbnrelu(32, 32, 3, 1, 1),
+            # nn.PixelShuffle(2),
+            nn.Conv2d(32, 3, 3, 1, 1)
+        )
+        # self.reconstructor = DnCNN(3, 16)
+        if self.params.perceptual_loss:
+            self.ploss_cnn = torchvision.models.vgg16_bn(True).features[:self.params.ploss_cnn_layer_idx+1].requires_grad_(False)
+
+    def reconstruct(self, xo):
+        x = self.bnrelu(torch.cat([l(xo) for l in self.multi_scale_conv],1))
+        for i,l in enumerate(self.convs):
+            f1 = l(x)
+            if i > 0:
+                x = torch.cat([f0,f1], 1)
+            else:
+                x = f1
+            f0 = f1
+        x = self.upsample(x)
+        return x
+
+    def compute_perceptual_loss(self, x, r):
+        x = self.normalization_layer(x)
+        r = self.normalization_layer(r)
+        
+        fx = self.ploss_cnn(x)
+        fr = self.ploss_cnn(r)
+        loss = torch.pow(fx - fr, 2).sum(1).mean()
+        return loss
+
+    def compute_loss(self, x, y, return_logits=True):
+        if (self.params.recon_wt > 0):# and self.training:
+            logits, recon = self.forward_and_reconstruct(x)
+            if self.params.perceptual_loss:
+                rloss = self.compute_perceptual_loss(x, recon)
+            else:
+                rloss = torch.pow(x.reshape(x.shape[0],-1) - recon.reshape(recon.shape[0],-1), 2).mean()
+        else:
+            logits = self.forward(x)
+            rloss = 0
+        closs = nn.functional.cross_entropy(logits, y)
+        loss = self.params.cls_wt * closs + self.params.recon_wt * rloss
+        if return_logits:
+            return logits, loss
+        return loss
