@@ -71,7 +71,6 @@ def embed_and_foveate(vfwidth, loc_idx, img, isobox_w, avg_bins, kernels, gblur_
     for i, r in enumerate(intersections[:][:-1]):
         if r == intersections[i+1]:
             intersections[i] = None
-    # print(intersections)
 
     bimg = torch.zeros_like(img)
     density_mat = torch.zeros_like(img)
@@ -258,9 +257,12 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         #                                                     kernels, self.kernel_size, blur=self.apply_blur,
         #                                                     gblur_fn=seperable_gaussian_blur_pytorch
         #                                                     )
-        return embed_and_foveate(self.input_shape[1], loc_idx, img, isobox_w, avg_bins, kernels, seperable_gaussian_blur_pytorch)
+        if self.apply_blur:
+            return embed_and_foveate(self.input_shape[1], loc_idx, img, isobox_w, avg_bins, kernels, seperable_gaussian_blur_pytorch)
+        else:
+            return img, None
     def __repr__(self):
-        return f'RetinaBlurFilter(loc_mode={self.params.loc_mode}, cone_std={self.cone_std}, rod_std={self.rod_std}, max_rod_density={self.max_rod_density}, kernel_size={self.kernel_size}, view_scale={self.view_scale}, beta={self.scale})'
+        return f'RetinaBlurFilter2(loc_mode={self.params.loc_mode}, cone_std={self.cone_std}, rod_std={self.rod_std}, max_rod_density={self.max_rod_density}, kernel_size={self.kernel_size}, view_scale={self.view_scale}, beta={self.scale}, blur={self.apply_blur}, desaturate={self.include_gry_img})'
     
     def prob2std(self, p):
         s = self.scale*(1-p) + 1e-5
@@ -344,6 +346,8 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         img_shape = img.shape[1:]
         if self.params.loc_mode == 'center':
             loc = self._get_center_loc(img)
+        elif self.params.loc_mode == 'const':
+            loc = self.params.loc
         elif (self.params.loc_mode in ['random_uniform', 'random_uniform_2']):
             if (self.input_shape[2]>img_shape[2]) and (self.input_shape[1] > img_shape[1]):
                 if (self.params.loc_mode == 'random_uniform'):
@@ -353,7 +357,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
             else:
                 loc = (0,0)            
         else:
-            raise ValueError('params.loc_mode must be "center" or "random_uniform" or "random_uniform_2"')
+            raise ValueError('params.loc_mode must be "center" or "random_uniform" or "random_uniform_2" or "const"')
         return loc
 
     def _forward_batch(self, img, loc_idx):

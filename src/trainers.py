@@ -4,7 +4,11 @@ from hashlib import sha224
 import os
 import shutil
 from time import time
-from typing import List, Literal, Type, Union, Tuple
+from typing import List, Type, Union, Tuple
+try:
+    from typing import Literal
+except ImportError:
+    from typing_extensions import Literal
 from attrs import define, field
 from mllib.trainers.base_trainers import Trainer as _Trainer
 from mllib.trainers.base_trainers import PytorchLightningTrainer
@@ -29,6 +33,8 @@ from adversarialML.biologically_inspired_models.src.utils import aggregate_dicts
 
 import torchmetrics
 from tqdm import tqdm
+
+from itertools import product
 
 
 def get_hash(x: Union[List, np.ndarray, torch.Tensor]):
@@ -122,7 +128,7 @@ class AdversarialTrainer(_Trainer, PruningMixin):
                 raise NotImplementedError(f'{type(atk)} is not supported')
             x,y = self._maybe_attack_batch(batch, atk)
 
-            logits, loss = self._get_outputs_and_loss(x, y)
+            logits, loss = self._get_outputs_and_loss((x, y))
             logits = logits.detach().cpu()
             
             y = y.detach().cpu()
@@ -368,9 +374,10 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             atk_name = f"{atk.__class__.__name__ if name is None else name}-{eps}"
 
             clean_x = batch[0]
-            x,y = self._maybe_attack_batch(batch, atk if eps > 0 else None)
+            batch = self._maybe_attack_batch(batch, atk if eps > 0 else None)
+            x, y = batch[0], batch[1]
 
-            logits, loss = self._get_outputs_and_loss(x, y)
+            logits, loss = self._get_outputs_and_loss(batch)
             logits = logits.detach().cpu()
             
             y = y.detach().cpu()
@@ -389,7 +396,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             test_acc[atk_name] = acc
             test_logits[atk_name] = logits.numpy()
             target_labels[atk_name] = y_tgt.detach().cpu().numpy().tolist()
-            self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
+            # self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
         return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels, 'logits': test_logits}, metrics
     
@@ -399,6 +406,37 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             np.savez(f'{self.per_sample_logdir}/adv_result_{atk_name}_{h}_input.npz', x=x, adv_x=adv_x)
             r = {'y': int(y), 'y_pred': int(p)}
             write_json(r, f'{self.per_sample_logdir}/adv_result_{atk_name}_{h}_output.json')
+
+class AnnotatedMultiAttackEvaluationTrainer(MultiAttackEvaluationTrainer):
+    def _maybe_attack_batch(self, batch, adv_attack):
+        x,y,l = batch
+        x,y = super()._maybe_attack_batch((x,y), adv_attack)
+        return x,y,l
+    
+    def _get_outputs_and_loss(self, batch):
+        def set_param(p:BaseParameters, param, value):
+            if hasattr(p, param):
+                setattr(p, param, value)
+            else:
+                d = p.asdict(recurse=False)
+                for v in d.values():
+                    if isinstance(v, BaseParameters):
+                        set_param(v, param, value)
+                    elif np.iterable(v):
+                        for x in v:
+                            if isinstance(x, BaseParameters):
+                                set_param(x, param, value)
+            return p
+
+        x,y,bb = batch
+        assert x.shape[0] == 1
+        l = torch.stack([x.shape[2]*(bb[:,0] + bb[:,2])/2, x.shape[3]*(bb[:,1] + bb[:,3])/2], 1).int().detach().cpu().numpy()
+        l = l.squeeze()
+
+        l = 800 - l
+        set_param(self.model.params, 'loc_mode', 'const')
+        set_param(self.model.params, 'loc', l)
+        return self.model.compute_loss(x, y)
 
 @define(slots=False)
 class RandomizedSmoothingParams:

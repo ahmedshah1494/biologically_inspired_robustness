@@ -71,7 +71,7 @@ class LinearLayer(AbstractModel):
             input_size = np.prod(input_size)
         self.layer = nn.Linear(input_size, self.params.common_params.num_units, bias=self.params.common_params.bias)
     
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         return self.layer(x)
 
 class MixerMLP(AbstractModel):

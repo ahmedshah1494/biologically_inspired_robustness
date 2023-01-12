@@ -61,6 +61,8 @@ if __name__ == '__main__':
     parser.add_argument('--output_to_task_logdir', action='store_true')
     parser.add_argument('--center_fixation', action='store_true')
     parser.add_argument('--five_fixations', action='store_true')
+    parser.add_argument('--bb_fixations', action='store_true')
+    parser.add_argument('--many_fixations', action='store_true')
     parser.add_argument('--hscan_fixations', action='store_true')
     parser.add_argument('--disable_retina', action='store_true')
     parser.add_argument('--disable_reconstruction', action='store_true')
@@ -98,7 +100,8 @@ if __name__ == '__main__':
                                                     add_fixed_noise_patch=args.add_fixed_noise_patch, 
                                                     use_common_corruption_testset=args.use_common_corruption_testset,
                                                     disable_reconstruction=args.disable_reconstruction,
-                                                    use_residual_img=args.use_residual_img)()
+                                                    use_residual_img=args.use_residual_img, fixate_in_bbox=args.bb_fixations
+                                                    many_fixations=args.many_fixations)()
         runner_cls = AdversarialAttackBatteryRunner
         runner_kwargs = {
             'output_to_ckp_dir': (not args.output_to_task_logdir)

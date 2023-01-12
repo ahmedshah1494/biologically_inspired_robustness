@@ -210,7 +210,8 @@ def setup_for_hscan_fixation_evaluation(p: BaseParameters):
 
 def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, test_eps=[0.0, 0.016, 0.024, 0.032, 0.048, 0.064], 
                                 center_fixation=False, five_fixation_ensemble=False, hscan_fixation_ensemble=False, view_scale=None, disable_retina=False, 
-                                add_fixed_noise_patch=False, use_common_corruption_testset=False, disable_reconstruction=False, use_residual_img=False):
+                                add_fixed_noise_patch=False, use_common_corruption_testset=False, disable_reconstruction=False, use_residual_img=False,
+                                fixate_in_bbox=False):
     class AdversarialAttackBatteryEvalTask(task_cls):
         _cls = task_cls
         def get_dataset_params(self):
@@ -232,6 +233,10 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                 if p.dataset == SupportedDatasets.CIFAR10:
                     p.dataset = SupportedDatasets.CIFAR10C
                     p.datafolder = '/home/mshah1/workhorse3/cifar-10-batches-py/distorted'
+            if fixate_in_bbox:
+                if p.dataset == SupportedDatasets.ECOSET10:
+                    p.dataset = SupportedDatasets.ECOSET10wBB_FOLDER
+                    p.datafolder = os.path.dirname(os.path.dirname(p.datafolder))
 
             p.max_num_test = num_test
             return p
@@ -258,7 +263,10 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
 
         def get_experiment_params(self) -> BaseExperimentConfig:
             p = super(AdversarialAttackBatteryEvalTask, self).get_experiment_params()
-            p.trainer_params.cls = MultiAttackEvaluationTrainer
+            if fixate_in_bbox:
+                p.trainer_params.cls = AnnotatedMultiAttackEvaluationTrainer
+            else:
+                p.trainer_params.cls = MultiAttackEvaluationTrainer
             p.batch_size = batch_size
             adv_config = p.trainer_params.adversarial_params
             adv_config.training_attack_params = None
@@ -283,6 +291,8 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                         name = '5Fixation'+name
                     if hscan_fixation_ensemble and isinstance(name, str):
                         name = 'HscanFixation'+name
+                    if fixate_in_bbox:
+                        name = 'BBFixation'+name
                 atk_params += [(name, atkfn(eps)) for eps in test_eps]
             adv_config.testing_attack_params = atk_params
             return p

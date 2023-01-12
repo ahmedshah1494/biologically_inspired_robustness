@@ -201,7 +201,7 @@ class GaussianNoiseLayer(AbstractModel):
     def __repr__(self):
         return f"GaussianNoiseLayer(std={self.std})"
     
-    def forward(self, img):
+    def forward(self, img, **kwargs):
         if self.training:
             d = torch.empty_like(img).normal_(0, self.std)
         else:
@@ -212,7 +212,7 @@ class GaussianNoiseLayer(AbstractModel):
                 d = 0
         return img + d
 
-    def compute_loss(self, x, y, return_logits=True):
+    def compute_loss(self, x, y, return_logits=True, **kwargs):
         out = self.forward(x)
         logits = out
         loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
@@ -225,7 +225,8 @@ class AbstractRetinaFilter(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
         input_shape: Union[int, List[int]] = None
-        loc_mode: Literal['center', 'random_uniform', 'five_fixations'] = 'random_uniform'
+        loc_mode: Literal['center', 'random_uniform', 'five_fixations', 'const'] = 'random_uniform'
+        loc: Tuple[int, int] = None
         batch_size: int = 128
 
     def _get_five_fixations(self, img):
@@ -245,6 +246,8 @@ class AbstractRetinaFilter(AbstractModel):
             loc = (input_shape[1]//2, input_shape[1]//2)
         elif self.params.loc_mode == 'random_uniform':
             loc = (np.random.randint(0, input_shape[1]), np.random.randint(0, input_shape[2]))
+        elif self.params.loc_mode == 'const':
+            loc = self.params.loc
         else:
             raise ValueError('params.loc_mode must be "center" or "random_uniform"')
         return loc
