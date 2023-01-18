@@ -44,6 +44,7 @@ attacks =  {
             # 'checkpoints/model_checkpoint.pt', eval.get_apgd_atk
             # ),
             'Square': eval.get_square_atk,
+            'AutoAttackLinf': eval.get_autoattack_linf_atk,
             'CWL2': eval.get_cwl2_atk
         }
 

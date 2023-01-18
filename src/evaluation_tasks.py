@@ -114,6 +114,11 @@ def get_cwl2_atk(conf):
     atk_p.run_params.epsilons = [1000.]
     return atk_p
 
+def get_autoattack_linf_atk(eps, nclasses=10):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.AUTOATTACK, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.n_classes = nclasses
+    return atk_p
 
 class GaussianNoiseAttack(torch.nn.Module):
     def __init__(self, model, std) -> None:
