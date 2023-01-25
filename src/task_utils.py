@@ -19,7 +19,7 @@ if 'bridges2' in hostname:
 else:
     logdir_root = '/share/workhorse3/mshah1'
 
-LOGDIR = f'{logdir_root}/biologically_inspired_models/iclr22_logs/'
+LOGDIR = f'{logdir_root}/biologically_inspired_models/logs/'
 
 def get_cifar10_params(num_train=25000, num_test=1000):
     p = ImageDatasetFactory.get_params()
