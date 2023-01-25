@@ -971,6 +971,53 @@ class Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18(Abstra
             logdir=LOGDIR, batch_size=64
         )
 
+class Ecoset100NoisyRetinaBlur2WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(AbstractTask):
+    imgs_size = 224
+    input_size = [3, 1600, 1600]
+    widen_factor = 2
+    widen_stem = False
+    noise_std = 0.125
+    num_classes = 100
+    def get_dataset_params(self) :
+        p = get_ecoset100shards_params(num_test=10, train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        return p
+
+    def get_model_params(self):
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, max_input_size=self.input_size, std=self.noise_std)
+        rblur_p = RBlur2.ModelParams(RBlur2, self.input_size, batch_size=32, cone_std=0.12, 
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform', loc_mode='random_uniform',
+                                                scale=12, min_res=33, max_res=400)
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, self.num_classes), num_classes=self.num_classes,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor, setup_classification=False,
+                                            setup_feature_extraction=True, widen_stem=self.widen_stem)
+        rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p, resnet_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        cp = LinearLayer.ModelParams(LinearLayer, CommonModelParams(self.input_size, self.num_classes, activation=nn.Identity))
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, cp)
+        return p
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 40
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=1830, pct_start=0.05, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=64
+        )
+
 class Ecoset100NoisyRetinaBlur2S2500WRandomScalesCyclicLR1e_1RandAugmentCORnetS(AbstractTask):
     imgs_size = 224
     input_size = [3, 1600, 1600]
