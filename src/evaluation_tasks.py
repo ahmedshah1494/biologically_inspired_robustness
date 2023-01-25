@@ -7,7 +7,7 @@ from mllib.runners.configs import BaseExperimentConfig
 import torch
 import torchvision
 
-from trainers import RandomizedSmoothingEvaluationTrainer, MultiAttackEvaluationTrainer, AnnotatedMultiAttackEvaluationTrainer, ManyFixationsEvaluationTrainer
+from trainers import RandomizedSmoothingEvaluationTrainer, MultiAttackEvaluationTrainer, AnnotatedMultiAttackEvaluationTrainer
 from mllib.datasets.dataset_factory import ImageDatasetFactory, SupportedDatasets
 
 from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter, GaussianNoiseLayer

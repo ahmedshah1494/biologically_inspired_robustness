@@ -100,8 +100,7 @@ if __name__ == '__main__':
                                                     add_fixed_noise_patch=args.add_fixed_noise_patch, 
                                                     use_common_corruption_testset=args.use_common_corruption_testset,
                                                     disable_reconstruction=args.disable_reconstruction,
-                                                    use_residual_img=args.use_residual_img, fixate_in_bbox=args.bb_fixations
-                                                    many_fixations=args.many_fixations)()
+                                                    use_residual_img=args.use_residual_img, fixate_in_bbox=args.bb_fixations)()
         runner_cls = AdversarialAttackBatteryRunner
         runner_kwargs = {
             'output_to_ckp_dir': (not args.output_to_task_logdir)
