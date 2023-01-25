@@ -331,6 +331,12 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         else:
             loc = self._get_random_loc(img)
         return loc
+
+    def _get_randominimage_loc(self, img):
+        img_shape = img.shape[1:]
+        center = np.array(self.input_shape[1:]) // 2
+        loc = (center[0] - np.random.randint(0, img_shape[1]), center[1] - np.random.randint(0, img_shape[2]))
+        return loc
     
     def forward(self, x, loc_idx=None):
         if self.params.loc_mode == 'hscan_fixations':
@@ -348,12 +354,14 @@ class RetinaBlurFilter(AbstractRetinaFilter):
             loc = self._get_center_loc(img)
         elif self.params.loc_mode == 'const':
             loc = self.params.loc
-        elif (self.params.loc_mode in ['random_uniform', 'random_uniform_2']):
+        elif (self.params.loc_mode in ['random_uniform', 'random_uniform_2', 'random_in_image']):
             if (self.input_shape[2]>img_shape[2]) and (self.input_shape[1] > img_shape[1]):
                 if (self.params.loc_mode == 'random_uniform'):
                     loc = self._get_random_loc(img)
                 elif (self.params.loc_mode == 'random_uniform_2'):
                     loc = self._get_random2_loc(img)
+                elif (self.params.loc_mode == 'random_in_image'):
+                    loc = self._get_randominimage_loc(img)
             else:
                 loc = (0,0)            
         else:
