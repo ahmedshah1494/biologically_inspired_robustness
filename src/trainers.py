@@ -377,7 +377,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             batch = self._maybe_attack_batch(batch, atk if eps > 0 else None)
             x, y = batch[0], batch[1]
 
-            logits, loss = self._get_outputs_and_loss(batch)
+            logits, loss = self._get_outputs_and_loss(*batch)
             logits = logits.detach().cpu()
             
             y = y.detach().cpu()
@@ -692,3 +692,46 @@ class LightningAdversarialTrainer(PytorchLightningTrainer, PruningMixin):
     def save_logs_after_test(self, train_metrics, test_outputs):
         self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
         self.save_source_dir()
+
+class FixationPointLightningAdversarialTrainer(LightningAdversarialTrainer):
+    def forward_step(self, batch, batch_idx):
+        x,y = batch
+        logits, loss = self._get_outputs_and_loss(x, y)
+        preds = torch.sigmoid(logits.cpu().detach()) > 0.5
+        acc = float((preds == y.cpu().detach()).float().mean())
+        
+        lr = self.scheduler.optimizer.param_groups[0]['lr']
+        loss = loss.mean()
+        t = time() - self.t0
+        logs = {'time': t, 'lr': lr, 'accuracy': acc, 'loss': loss.detach()}
+        return {'loss':loss, 'logs':logs}
+    
+    def test_step(self, batch, batch_idx):
+        return super(LightningAdversarialTrainer, self).test_step(batch, batch_idx)
+    
+    def test_epoch_end(self, outputs):
+        train_metrics = {'train_accuracy': 0.}
+        self.save_logs_after_test(train_metrics, outputs)
+        return super(LightningAdversarialTrainer, self).test_epoch_end(outputs)
+
+class ClickmeImportanceMapLightningAdversarialTrainer(FixationPointLightningAdversarialTrainer):
+    def forward_step(self, batch, batch_idx):
+        x,y = batch
+        y = y.squeeze().unsqueeze(1)
+        maxval = torch.flatten(y, 1).max(1)[0]
+        # print(y.shape, torch.flatten(y, 1).shape, maxval.shape)
+        maxval = maxval.reshape(len(y), 1, 1, 1)
+        y = y / maxval
+        return super().forward_step((x,y), batch_idx)
+
+    def training_step(self, batch, batch_idx):
+        x,_,y = batch
+        return super().training_step((x,y), batch_idx)
+    
+    def validation_step(self, batch, batch_idx):
+        x,_,y = batch
+        return super().validation_step((x,y), batch_idx)
+    
+    def test_step(self, batch, batch_idx):
+        x,_,y = batch
+        return super().test_step((x,y), batch_idx)
