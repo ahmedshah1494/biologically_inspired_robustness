@@ -4,7 +4,7 @@ from adversarialML.biologically_inspired_models.src.models import (
     CommonModelParams, GeneralClassifier, SequentialLayers, XResNet34, XResNet18, XResNet50, WideResnet,
     ActivationLayer, BatchNorm2DLayer, FovTexVGG)
 from adversarialML.biologically_inspired_models.src.retina_preproc import (
-    RetinaBlurFilter, RetinaNonUniformPatchEmbedding, RetinaWarp, GaussianBlurLayer)
+    RetinaBlurFilter, RetinaNonUniformPatchEmbedding, RetinaWarp, GaussianBlurLayer, GreyscaleLayer)
 from adversarialML.biologically_inspired_models.src.supconloss import \
     TwoCropTransform
 from adversarialML.biologically_inspired_models.src.trainers import MixedPrecisionAdversarialTrainer, LightningAdversarialTrainer
@@ -117,6 +117,44 @@ class Ecoset10CyclicLRRandAugmentXResNet2x18(AbstractTask):
         nepochs = 60
         return BaseExperimentConfig(
             MixedPrecisionAdversarialTrainer.TrainerParams(MixedPrecisionAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.4, epochs=nepochs, steps_per_epoch=376, pct_start=0.2, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=128
+        )
+
+class Ecoset10GreyscaleCyclicLRRandAugmentXResNet2x18(AbstractTask):
+    imgs_size = 224
+    input_size = [3, imgs_size, imgs_size]
+    widen_factor = 2
+    def get_dataset_params(self) :
+        p = get_ecoset10_params(train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15),
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        return p
+
+    def get_model_params(self):
+        gs_p = GreyscaleLayer.ModelParams(GreyscaleLayer, ndim=3)
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 10), num_classes=10,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, gs_p, resnet_p)
+        return p
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
                 TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
                     tracking_mode='max', scheduler_step_after_epoch=False
                 )
