@@ -149,9 +149,12 @@ class GreyscaleLayer(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
         clr_wt: float = 0
+        ndim: int = 1
     
     def forward(self, x: torch.Tensor):
-        return x.mean(1, keepdim=True)
+        x = x.mean(1, keepdim=True)
+        x = torch.repeat_interleave(x, self.params.ndim, 1)
+        return x
 
     def compute_loss(self, x, y, return_logits=True):
         out = self.forward(x)
@@ -203,7 +206,8 @@ class AbstractRetinaFilter(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
         input_shape: Union[int, List[int]] = None
-        loc_mode: Literal['center', 'random_uniform', 'five_fixations'] = 'random_uniform'
+        loc_mode: Literal['center', 'random_uniform', 'five_fixations', 'const'] = 'random_uniform'
+        loc: Tuple[int, int] = None
         batch_size: int = 128
 
     def _get_five_fixations(self, img):
@@ -222,6 +226,8 @@ class AbstractRetinaFilter(AbstractModel):
             loc = (self.params.input_shape[1]//2, self.params.input_shape[1]//2)
         elif self.params.loc_mode == 'random_uniform':
             loc = (np.random.randint(0, self.params.input_shape[1]), np.random.randint(0, self.params.input_shape[2]))
+        elif self.params.loc_mode == 'const':
+            loc = self.params.loc
         else:
             raise ValueError('params.loc_mode must be "center" or "random_uniform"')
         return loc
