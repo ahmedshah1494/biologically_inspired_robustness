@@ -30,6 +30,7 @@ attacks =  {
             'APGDL2': eval.get_apgd_l2_atk, 
             'APGDL2_EOT20': eval.get_eot20_apgd_l2_atk,
             'APGDL2_EOT50': eval.get_eot50_apgd_l2_atk,
+            'APGDL1': eval.get_apgd_l1_atk,
             # 'APGD_Transfer_MM8L':eval.get_transfered_atk(
             # '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
             # 'Cifar10AutoAugmentMLPMixer8LTask-50K/4/'
@@ -147,6 +148,8 @@ if __name__ == '__main__':
     for ckp_pth in ckp_pths:
         runner = runner_cls(task, num_trainings=args.num_trainings, ckp_pth=ckp_pth, load_model_from_ckp=(ckp_pth is not None), **runner_kwargs)
         if args.eval_only:
+            with open(f'{os.path.dirname(os.path.dirname(ckp_pth))}/eval_cmd_{time()}.txt', 'w') as f:
+                f.write(str(args))
             runner.create_trainer()
             runner.test()
         elif args.prune_and_test:
@@ -154,4 +157,6 @@ if __name__ == '__main__':
             runner.trainer.prune()
             runner.test()
         else:
+            with open(f'{os.path.dirname(os.path.dirname(ckp_pth))}/train_cmd_{time()}.txt', 'w') as f:
+                f.write(str(args))
             runner.run()

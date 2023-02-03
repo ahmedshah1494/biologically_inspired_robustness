@@ -21,7 +21,7 @@ from einops import rearrange
 
 import pytorch_lightning as pl
 
-from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper, FoolboxCWL2AttackWrapper
+from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper, FoolboxCWL2AttackWrapper, AutoAttackkWrapper
 from mllib.adversarial.randomized_smoothing.core import Smooth
 from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin
 from adversarialML.biologically_inspired_models.src.pruning import PruningMixin
@@ -361,7 +361,10 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
                 eps = atk.attack.confidence
             elif isinstance(atk, FoolboxAttackWrapper):
                 eps = atk.run_kwargs.get('epsilons', [float('inf')])[0]
-            elif isinstance(atk, torchattacks.attack.Attack):
+            elif isinstance(atk, AutoAttackkWrapper):
+                eps = atk.attack.eps
+            # elif isinstance(atk, torchattacks.attack.Attack):
+            elif hasattr(atk, 'eps'):
                 eps = atk.eps
             else:
                 raise NotImplementedError(f'{type(atk)} is not supported')
@@ -389,7 +392,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             test_acc[atk_name] = acc
             test_logits[atk_name] = logits.numpy()
             target_labels[atk_name] = y_tgt.detach().cpu().numpy().tolist()
-            self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
+            # self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
         return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels, 'logits': test_logits}, metrics
     

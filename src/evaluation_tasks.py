@@ -75,6 +75,12 @@ def get_eot50_apgd_l2_atk(eps):
     p.eot_iter = 50
     return p
 
+def get_apgd_l1_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDL1, SupportedBackend.AUTOATTACK)
+    atk_p.eps = eps
+    atk_p.nsteps = 100
+    return atk_p
+
 def get_square_atk(eps):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.SQUARELINF, SupportedBackend.TORCHATTACKS)
     atk_p.eps = eps
