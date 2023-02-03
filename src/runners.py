@@ -110,6 +110,15 @@ class AdversarialAttackBatteryRunner(AdversarialExperimentRunner):
     def __init__(self, task, num_trainings: int = 1, ckp_pth: str = None, load_model_from_ckp: bool = False, output_to_ckp_dir=True, wrap_trainer_with_lightning: bool = False, lightning_kwargs=...) -> None:
         self.output_to_ckp_dir = output_to_ckp_dir
         super().__init__(task, num_trainings, ckp_pth, load_model_from_ckp, wrap_trainer_with_lightning, lightning_kwargs)
+    
+    def create_model(self) -> torch.nn.Module:
+        p = self.task.get_model_params()
+        model: torch.nn.Module = p.cls(p)
+        if self.load_model_from_ckp:
+            src_model = self.load_model()
+            model = load_params_into_model(src_model, model)
+        print_num_params(model)
+        return model
 
     def get_experiment_dir(self, logdir, exp_name):
         if self.output_to_ckp_dir:
