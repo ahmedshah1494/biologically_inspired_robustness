@@ -1,10 +1,9 @@
 import torchvision
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import NormalizationLayer
 from adversarialML.biologically_inspired_models.src.models import (
-    CommonModelParams, GeneralClassifier, SequentialLayers, XResNet34, XResNet18, XResNet50, WideResnet, CORnetS,
-    ActivationLayer, BatchNorm2DLayer, LogitAverageEnsembler, SupervisedContrastiveTrainingWrapper, IdentityLayer,
-    XResNetClassifierWithReconstructionLoss, XResNetClassifierWithEnhancer, XResNetClassifierWithDeepResidualEnhancer,
-    FixationPredictionNetwork, ConvEncoder, ConvParams, FixationHeatmapPredictionNetwork, RetinaFilterFixationPrediction)
+    CommonModelParams, GeneralClassifier, SequentialLayers, XResNet18,IdentityLayer,
+    FixationPredictionNetwork, ConvEncoder, ConvParams)
+from adversarialML.biologically_inspired_models.src.fixation_prediction.models import FixationHeatmapPredictionNetwork, FixationPredictionNetwork, RetinaFilterFixationPrediction
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import LinearLayer
 from adversarialML.biologically_inspired_models.src.retina_blur2 import RetinaBlurFilter as RBlur2
 from adversarialML.biologically_inspired_models.src.retina_preproc import (
