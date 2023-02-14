@@ -10,87 +10,111 @@ from fastai.vision.models.xresnet import xresnet18
 from fastai.layers import ResBlock
 from fastai.layers import ResBlock
 from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
+from torchvision.models.segmentation import fcn_resnet50, fcn, deeplabv3_resnet50, deeplabv3
+from torchvision.models.resnet import resnet18
+from torchvision.models._utils import IntermediateLayerGetter
 from matplotlib import pyplot as plt
 
-from adversarialML.biologically_inspired_models.src.models import CommonModelParams, ConvEncoder, convbnrelu
+from adversarialML.biologically_inspired_models.src.models import CommonModelParams, ConvEncoder, convbnrelu, bnrelu
 
-class FixationPredictionNetwork(AbstractModel):
-    @define(slots=False)
-    class ModelParams(BaseParameters):
-        common_params: CommonModelParams = field(factory=CommonModelParams)
-        conv_params: ConvEncoder.ModelParams = field(factory=ConvEncoder.ModelParams)
-        output_layer_params: BaseParameters = None
-        num_fixation_points: int = 49
-        preprocessing_params: BaseParameters = None
-
-    def __init__(self, params: ModelParams) -> None:
-        super().__init__(params)
-        self.params = params
-        self._make_network()
-
-    def _make_network(self):
-        x = torch.rand(1, *(self.params.common_params.input_size))
-        self.preprocessor = self.params.preprocessing_params.cls(self.params.preprocessing_params)
-        
-        # x = self.preprocess(x)
-        # self.params.conv_params.common_params.input_size = x.shape[1:]
-        # self.conv = self.params.conv_params.cls(self.params.conv_params)
-
-        # self.conv = nn.Sequential(
-        #     convbnrelu(3, 16, 7, 2, 3),
-        #     convbnrelu(16, 32, 5, 2, 2),
-        #     convbnrelu(32, 64, 5, 2, 2),
-        #     convbnrelu(64, 128, 5, 2, 2),
-        #     convbnrelu(128, 256, 5, 2, 2),
-        #     nn.Conv2d(256, 1, 1, 1)
-        # )
-        rn18 = xresnet18()
-        self.conv = nn.Sequential(*([rn18[i] for i in range(0, 8)]), nn.Conv2d(512, 1, 1))
-
-        # x = self.conv(x)
-        # x = x.reshape(x.shape[0], -1)
-        # self.output = self.params.output_layer_params.cls(self.params.output_layer_params)
-        
-    def preprocess(self, x):
-        x = self.preprocessor(x)
-        if isinstance(x, tuple):
-            x = x[0]
-        return x
-
-    def forward(self, x):
-        x = self.preprocess(x)
-        x = self.conv(x)
-        x = torch.flatten(x,1)
-        # x = self.output(x)
-        return x
+class SkipConnection(nn.Sequential):
+    def __init__(self, *block_layers) -> None:
+        super().__init__(*block_layers)
     
-    def compute_loss(self, x, y, return_logits=True):
-        logits = self.forward(x)
-        npos = y.sum()
-        poswt = (torch.numel(y)-npos)/npos
-        # print(logits.dtype, logits.shape, y.dtype, y.shape)
-        loss = nn.BCEWithLogitsLoss(pos_weight=poswt)(logits, y)
-        if return_logits:
-            return logits, loss
-        else:
-            return loss
+    def forward(self, x):
+        return x + super().forward(x)
 
-class DenseNet(nn.Module):
-    def __init__(self, inchannels, outchannels, kernel_size, nlayers) -> None:
+class UNet(nn.Module):
+    def __init__(self, num_filters=[64,128,256,512,1024]) -> None:
         super().__init__()
-        self.convs = nn.ModuleList([
-            convbnrelu(inchannels, outchannels, kernel_size, 1, kernel_size//2),
-            *([convbnrelu(outchannels, outchannels, kernel_size, 1, kernel_size//2) for i in range(nlayers-1)])
+        ks = 3
+        pd = ks//2
+        dsblock = lambda ic, oc: nn.Sequential(
+            convbnrelu(ic, oc, ks, 2, pd),
+            SkipConnection(
+                convbnrelu(oc, oc, ks, 1, pd),
+                convbnrelu(oc, oc, ks, 1, pd)
+            ),
+        )
+        usblock = lambda ic, hc, oc: nn.Sequential(
+            convbnrelu(ic, hc, ks, 1, pd),
+            SkipConnection(
+                convbnrelu(hc, hc, ks, 1, pd)
+            ),
+            nn.ConvTranspose2d(hc, oc, ks, 2, pd, 1),
+            bnrelu(oc),
+        )
+        [f1,f2,f3,f4,f5] = num_filters
+        self.downsample_layers = nn.ModuleList([
+            nn.Sequential(
+                convbnrelu(3, f1, ks, 1, pd),
+                # convbnrelu(f1, f1, ks, 1, pd),
+                deeplabv3.ASPP(f1, [6, 12, 18], f1),
+            ),
+            dsblock(f1, f2),
+            dsblock(f2, f3),
+            dsblock(f3, f4),
+            dsblock(f4, f5),
         ])
+        self.upsample_layers = nn.ModuleList([
+            nn.Sequential(
+                nn.ConvTranspose2d(f5, f4, ks, 2, pd, 1),
+                bnrelu(f4),
+            ),
+            usblock(f5, f4, f3),
+            usblock(f4, f3, f2),
+            usblock(f3, f2, f1),
+        ])
+        self.mask_predictor = nn.Sequential(
+            convbnrelu(f2, f1, ks, 1, pd),
+            convbnrelu(f1, f1, ks, 1, pd),
+            nn.Conv2d(f1, 1, 1, 1)
+        )
+        # self.aspp_head = deeplabv3.DeepLabHead(f5, f5)
     
     def forward(self, x):
-        act_sum = 0
-        prev_act = 0
-        for i,l in enumerate(self.convs):
-            if i > 0:
-                prev_act = x
-            x = l(x+act_sum)
-            act_sum += prev_act
+        dsfeats = []
+        for l in self.downsample_layers:
+            x = l(x)
+            dsfeats.append(x)
+
+        dsfeats = dsfeats[:-1][::-1]
+        # x = self.aspp_head(x)
+        # dsfeats.append(None)
+        assert len(dsfeats) == len(self.upsample_layers)
+        for i, (dsf, l) in enumerate(zip(dsfeats, self.upsample_layers)):
+            x = l(x)
+            x = torch.cat([x, dsf], 1)
+        x = self.mask_predictor(x)
+        return x
+
+class DeepLayer3p(nn.Module):
+    def __init__(self, backbone, nclasses, upsample_output=True) -> None:
+        super().__init__()
+        self.backbone = IntermediateLayerGetter(backbone, {'layer1':'low_level_feats', 'layer4':'out'})
+        self.aspp_layer = deeplabv3.ASPP(512, [1, 6, 12, 18], 256)
+        self.decoder_conv1 = convbnrelu(64, 64, 1, 1, 0)
+        self.decoder = nn.Sequential(
+            convbnrelu(256+64, 256, 3, 1, 1),
+            nn.Dropout(0.5),
+            convbnrelu(256, 256, 3, 1, 1),
+            nn.Dropout(0.1),
+            nn.Conv2d(256, nclasses, 1, 1)
+        )
+        self.upsample_output = upsample_output
+    
+    def forward(self, x):
+        input_size = x.shape
+        out = self.backbone(x)
+        x = out['out']
+        x = self.aspp_layer(x)
+
+        llfeat = self.decoder_conv1(out['low_level_feats'])
+        x = nn.functional.interpolate(x, size=llfeat.shape[2:], mode='bilinear', align_corners=False)
+        x = torch.cat([x, llfeat], 1)
+        x = self.decoder(x)
+        if self.upsample_output:
+            x = nn.functional.interpolate(x, size=input_size[2:], mode='bilinear', align_corners=False)
         return x
 
 class GaussianPyramid(nn.Module):
@@ -122,6 +146,108 @@ class GaussianPyramid(nn.Module):
             x = self._downsample(x)
             levels.append(x)
         return levels
+class FixationPredictionNetwork(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        common_params: CommonModelParams = field(factory=CommonModelParams)
+        arch: str = 'unet'
+        preprocessing_params: BaseParameters = None
+
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.params = params
+        self._make_network()
+
+    def _make_network(self):
+        x = torch.rand(1, *(self.params.common_params.input_size))
+        self.preprocessor = self.params.preprocessing_params.cls(self.params.preprocessing_params)
+        # rn18 = xresnet18()
+        # self.conv = nn.Sequential(*([rn18[i] for i in range(0, 8)]), nn.Conv2d(512, 1, 1))
+        
+        if self.params.arch == 'unet':
+            self.conv = UNet(num_filters=[16,32,64,128,256])
+
+        # self.conv = fcn_resnet50(pretrained=True)
+        # self.conv.classifier[4] = nn.Conv2d(512, 1, 1, 1)
+        # self.conv.aux_classifier[4] = nn.Conv2d(256, 1, 1, 1)
+
+        # self.conv = deeplabv3_resnet50(True)
+        # self.conv.classifier[4] = nn.Conv2d(256, 1, 1, 1)
+        # self.conv = deeplabv3._deeplabv3_resnet(resnet18(False), 1, False)
+        # self.conv.classifier = deeplabv3.DeepLabHead(512, 1)
+
+        # self.conv = DeepLayer3p(resnet18(), 1)
+        self.pyramid = GaussianPyramid(5)
+        
+    def preprocess(self, x):
+        x = self.preprocessor(x)
+        if isinstance(x, tuple):
+            x = x[0]
+        return x
+
+    def forward(self, x):
+        x = self.preprocess(x)
+        x = self.conv(x)#['out']
+        # x = torch.flatten(x,1)
+        # x = self.output(x)
+        return x
+    
+    def reshape_target(self, y):
+        n = int(np.sqrt(y.shape[-1]))
+        y = y.reshape(y.shape[0], 1, n, n)
+        return y
+
+    def upsample_target(self, y, size):
+        y = torch.nn.functional.interpolate(y, size=size)
+        return y
+
+    def compute_loss(self, x, y, return_logits=True):
+        y = self.reshape_target(y)
+        logits = self.forward(x)
+        y_us = self.upsample_target(y, logits.shape[2:])
+        logit_levels = self.pyramid(logits)
+        y_levels = self.pyramid(y_us)
+        # print(y.shape, y_us.shape, [y_.shape for y_ in y_levels])
+        assert y_levels[-1].shape == y.shape
+        y_levels[-1] = y
+        loss = 0
+        for yl, ylp in zip(y_levels, logit_levels):
+            npos = yl.sum()
+            poswt = (torch.numel(yl)-npos)/npos
+            # print(logits.dtype, logits.shape, y.dtype, y.shape)
+            loss += nn.BCEWithLogitsLoss(pos_weight=poswt)(ylp, yl)
+        loss /= len(y_levels)
+        if return_logits:
+            return logits[-1], loss
+        else:
+            return loss       
+        # logits = self.forward(x)
+        # npos = y.sum()
+        # poswt = (torch.numel(y)-npos)/npos
+        # # print(logits.dtype, logits.shape, y.dtype, y.shape)
+        # loss = nn.BCEWithLogitsLoss(pos_weight=poswt)(logits, y)
+        # if return_logits:
+        #     return logits, loss
+        # else:
+        #     return loss
+
+class DenseNet(nn.Module):
+    def __init__(self, inchannels, outchannels, kernel_size, nlayers) -> None:
+        super().__init__()
+        self.convs = nn.ModuleList([
+            convbnrelu(inchannels, outchannels, kernel_size, 1, kernel_size//2),
+            *([convbnrelu(outchannels, outchannels, kernel_size, 1, kernel_size//2) for i in range(nlayers-1)])
+        ])
+    
+    def forward(self, x):
+        act_sum = 0
+        prev_act = 0
+        for i,l in enumerate(self.convs):
+            if i > 0:
+                prev_act = x
+            x = l(x+act_sum)
+            act_sum += prev_act
+        return x
 
 class FixationHeatmapPredictionNetwork(AbstractModel):
     @define(slots=False)
@@ -137,7 +263,8 @@ class FixationHeatmapPredictionNetwork(AbstractModel):
     def _make_network(self):
         self.preprocessor = self.params.preprocessing_params.cls(self.params.preprocessing_params)
         self.pyramid = GaussianPyramid(5)
-        self._create_convs()
+        self.heatmap_predictor = DeepLayer3p(resnet18(), 1)
+        # self._create_convs()
         # self.conv = nn.Sequential(
         #     convbnrelu(3, 16, 7, 1, 3),
         #     convbnrelu(16, 32, 5, 1, 2),
@@ -155,24 +282,24 @@ class FixationHeatmapPredictionNetwork(AbstractModel):
         #     # nn.ReLU()
         # )
 
-    def _create_convs(self):
-        rn18 = xresnet18()
-        self.downsample = nn.Sequential(*([rn18[i] for i in range(0, 8)]))
-        self.upsample_layers = nn.ModuleList([
-            nn.Sequential(ResBlock(1,512, 256*4), nn.PixelShuffle(2)),
-            nn.Sequential(ResBlock(1,256, 128*4), nn.PixelShuffle(2)),
-            nn.Sequential(ResBlock(1,128, 64*4), nn.PixelShuffle(2), ResBlock(1,64, 64), ResBlock(1,64, 64)),
-            nn.Sequential(convbnrelu(64,64*4,3,1,1), nn.PixelShuffle(2)),
-            nn.Sequential(convbnrelu(64,32,3,1,1), convbnrelu(32,32*4,3,1,1), nn.PixelShuffle(2)),
-        ])
-        self.output_layers = nn.ModuleList([
-            nn.Conv2d(512, 1, 1),
-            nn.Conv2d(256, 1, 1),
-            nn.Conv2d(128, 1, 1),
-            nn.Conv2d(64, 1, 1),
-            nn.Conv2d(64, 1, 1),
-            nn.Conv2d(32, 1, 1),
-        ])
+    # def _create_convs(self):
+    #     rn18 = xresnet18()
+    #     self.downsample = nn.Sequential(*([rn18[i] for i in range(0, 8)]))
+    #     self.upsample_layers = nn.ModuleList([
+    #         nn.Sequential(ResBlock(1,512, 256*4), nn.PixelShuffle(2)),
+    #         nn.Sequential(ResBlock(1,256, 128*4), nn.PixelShuffle(2)),
+    #         nn.Sequential(ResBlock(1,128, 64*4), nn.PixelShuffle(2), ResBlock(1,64, 64), ResBlock(1,64, 64)),
+    #         nn.Sequential(convbnrelu(64,64*4,3,1,1), nn.PixelShuffle(2)),
+    #         nn.Sequential(convbnrelu(64,32,3,1,1), convbnrelu(32,32*4,3,1,1), nn.PixelShuffle(2)),
+    #     ])
+    #     self.output_layers = nn.ModuleList([
+    #         nn.Conv2d(512, 1, 1),
+    #         nn.Conv2d(256, 1, 1),
+    #         nn.Conv2d(128, 1, 1),
+    #         nn.Conv2d(64, 1, 1),
+    #         nn.Conv2d(64, 1, 1),
+    #         nn.Conv2d(32, 1, 1),
+    #     ])
 
     def preprocess(self, x):
         x = self.preprocessor(x)
@@ -182,18 +309,20 @@ class FixationHeatmapPredictionNetwork(AbstractModel):
 
     def forward(self, x, return_all_levels=False):
         x = self.preprocess(x)
-        x = self.downsample(x)
-        outputs = [self.output_layers[0](x)]
-        for ul, ol in zip(self.upsample_layers, self.output_layers[1:]):
-            x = ul(x)
-            o = ol(x)
-            outputs.append(o)
-        if return_all_levels:
-            return outputs
-        return outputs[-1]
+        return self.heatmap_predictor(x)
+        # x = self.downsample(x)
+        # outputs = [self.output_layers[0](x)]
+        # for ul, ol in zip(self.upsample_layers, self.output_layers[1:]):
+        #     x = ul(x)
+        #     o = ol(x)
+        #     outputs.append(o)
+        # if return_all_levels:
+        #     return outputs
+        # return outputs[-1]
     
     def compute_loss(self, x, y, return_logits=True):
         logits = self.forward(x, return_all_levels=True)
+        logits = self.pyramid(logits)[::-1]
         y_levels = self.pyramid(y)[::-1]
         loss = 0
         for yl, ylp in zip(y_levels, logits):
@@ -231,7 +360,10 @@ class RetinaFilterFixationPrediction(AbstractModel):
     def _maybe_load_ckp(self):
         if (self.params.fixation_model_ckp is not None) and (not self.ckp_loaded):
             print('loading fixation model...')
-            load_params_into_model(torch.load(self.params.fixation_model_ckp), self.fixation_model)
+            ckp = torch.load(self.params.fixation_model_ckp)
+            load_params_into_model(ckp, self.fixation_model)
+            print('fixation model loaded!')
+            self.fixation_model = self.fixation_model.eval()
             self.ckp_loaded = True
     
     def preprocess(self, x):
