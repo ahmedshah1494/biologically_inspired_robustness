@@ -274,6 +274,15 @@ class Ecoset10NoisyRetinaBlur2WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ab
 class Ecoset10NoisyRetinaBlur2S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10NoisyRetinaBlur2WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
     noise_std = 0.25
 
+class Ecoset10NoisyRetinaBlurVF12002S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10NoisyRetinaBlur2S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
+    input_size = [3,1200,1200]
+
+class Ecoset10NoisyRetinaBlurVF10002S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10NoisyRetinaBlur2S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
+    input_size = [3,1000,1000]
+
+class Ecoset10NoisyRetinaBlurVF8002S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10NoisyRetinaBlur2S2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
+    input_size = [3,800,800]
+
 class Ecoset10NoisyRetinaBlur2WRandomScalesCyclicLR1e_1RandAugmentXResNet2x34(Ecoset10NoisyRetinaBlur2WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18):
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, max_input_size=self.input_size, std=self.noise_std)
