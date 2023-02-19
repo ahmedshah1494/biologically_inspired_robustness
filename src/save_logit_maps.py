@@ -48,6 +48,7 @@ parser.add_argument('--num_test', type=int, default=np.inf)
 parser.add_argument('--N', type=int, default=49)
 parser.add_argument('--image_dir', type=str)
 parser.add_argument('--logit_map_output_dir', type=str)
+parser.add_argument('--overwrite', action='store_true')
 
 args = parser.parse_args()
 
@@ -96,6 +97,16 @@ for i,batch in enumerate(t):
     # if i < 473:
     #     continue
     filenames, x, y = batch
+    idx_to_include = []
+    if not args.overwrite:
+        for i, fn in enumerate(filenames):
+            [label, fn] = fn.split('/')[-2:]
+            odir = f'{args.logit_map_output_dir}/{label}/'
+            ofn = f'{odir}/{fn.split(".")[0]}.npz'
+            if not os.path.exists(ofn):
+                idx_to_include.append(i)
+        filenames, x, y = filenames[idx_to_include], x[idx_to_include], y[idx_to_include]
+
     # print(filenames)
     # exit()
     x = x.cuda()
@@ -106,7 +117,8 @@ for i,batch in enumerate(t):
     c = np.zeros((x.shape[0],), dtype=bool)
     for l in locs:
         set_param(model.params, 'loc_mode', 'const')
-        set_param(model.params, 'loc', (vf_rad - l[0], vf_rad - l[1]))
+        # set_param(model.params, 'loc', (vf_rad - l[0], vf_rad - l[1]))
+        set_param(model.params, 'loc', (l[0], l[1]))
         if args.eps > 0:
             x = APGD(model, eps=args.eps)(x, y)
         logits = model(x).detach().cpu()
