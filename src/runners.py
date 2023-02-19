@@ -70,9 +70,9 @@ class AdversarialExperimentRunner(BaseRunner):
         
         ds = self.task.get_dataset_params().dataset
         if isinstance(train_dataset, wds.WebDataset):
-            num_workers = 16
+            num_workers = 16 // torch.cuda.device_count()
 
-            train_dataset = train_dataset.batched(p.batch_size, partial=False)
+            train_dataset = train_dataset.shuffle(10_000).batched(p.batch_size, partial=False)
             val_dataset = val_dataset.batched(p.batch_size, partial=False)
             test_dataset = test_dataset.batched(p.batch_size, partial=False)
 
