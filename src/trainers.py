@@ -698,12 +698,11 @@ class FixationPointLightningAdversarialTrainer(LightningAdversarialTrainer):
         x,y = batch
         logits, loss = self._get_outputs_and_loss(x, y)
         preds = torch.sigmoid(logits.cpu().detach()) > 0.5
-        acc = float((preds == y.cpu().detach()).float().mean())
         
         lr = self.scheduler.optimizer.param_groups[0]['lr']
         loss = loss.mean()
         t = time() - self.t0
-        logs = {'time': t, 'lr': lr, 'accuracy': acc, 'loss': loss.detach()}
+        logs = {'time': t, 'lr': lr, 'accuracy': 0, 'loss': loss.detach()}
         return {'loss':loss, 'logs':logs}
     
     def test_step(self, batch, batch_idx):
@@ -718,10 +717,6 @@ class ClickmeImportanceMapLightningAdversarialTrainer(FixationPointLightningAdve
     def forward_step(self, batch, batch_idx):
         x,y = batch
         y = y.squeeze().unsqueeze(1)
-        maxval = torch.flatten(y, 1).max(1)[0]
-        # print(y.shape, torch.flatten(y, 1).shape, maxval.shape)
-        maxval = maxval.reshape(len(y), 1, 1, 1)
-        y = y / maxval
         return super().forward_step((x,y), batch_idx)
 
     def training_step(self, batch, batch_idx):
