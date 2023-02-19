@@ -1,4 +1,5 @@
 
+from typing import Union
 from attrs import define, field
 from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
@@ -6,16 +7,17 @@ import numpy as np
 
 from torch import nn
 import torch
-from fastai.vision.models.xresnet import xresnet18
+from fastai.vision.models.xresnet import xresnet18, XResNet
 from fastai.layers import ResBlock
 from fastai.layers import ResBlock
 from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
 from torchvision.models.segmentation import fcn_resnet50, fcn, deeplabv3_resnet50, deeplabv3
-from torchvision.models.resnet import resnet18
+from torchvision.models.resnet import resnet18, ResNet
 from torchvision.models._utils import IntermediateLayerGetter
 from matplotlib import pyplot as plt
 
-from adversarialML.biologically_inspired_models.src.models import CommonModelParams, ConvEncoder, convbnrelu, bnrelu
+from adversarialML.biologically_inspired_models.src.models import CommonModelParams, ConvEncoder, XResNet34, convbnrelu, bnrelu
+from adversarialML.biologically_inspired_models.src.retina_blur2 import RetinaBlurFilter as RBlur2
 
 class SkipConnection(nn.Sequential):
     def __init__(self, *block_layers) -> None:
@@ -88,12 +90,12 @@ class UNet(nn.Module):
         x = self.mask_predictor(x)
         return x
 
-class DeepLayer3p(nn.Module):
-    def __init__(self, backbone, nclasses, upsample_output=True) -> None:
+class DeepLab3p(nn.Module):
+    def __init__(self, backbone, nclasses, hl_channels=512, ll_channels=64, upsample_output=True) -> None:
         super().__init__()
-        self.backbone = IntermediateLayerGetter(backbone, {'layer1':'low_level_feats', 'layer4':'out'})
-        self.aspp_layer = deeplabv3.ASPP(512, [1, 6, 12, 18], 256)
-        self.decoder_conv1 = convbnrelu(64, 64, 1, 1, 0)
+        self.backbone = backbone
+        self.aspp_layer = deeplabv3.ASPP(hl_channels, [1, 6, 12, 18], 256)
+        self.decoder_conv1 = convbnrelu(ll_channels, 64, 1, 1, 0)
         self.decoder = nn.Sequential(
             convbnrelu(256+64, 256, 3, 1, 1),
             nn.Dropout(0.5),
@@ -152,6 +154,11 @@ class FixationPredictionNetwork(AbstractModel):
         common_params: CommonModelParams = field(factory=CommonModelParams)
         arch: str = 'unet'
         preprocessing_params: BaseParameters = None
+        deeplab_backbone_params: Union[BaseParameters, str] = 'resnet18'
+        deeplab_backbone_ckp_path: str = None
+        freeze_deeplab_backbone: bool = False
+        partially_mask_loss: bool = False
+        loss_fn: str = 'bce'
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -176,7 +183,31 @@ class FixationPredictionNetwork(AbstractModel):
         # self.conv = deeplabv3._deeplabv3_resnet(resnet18(False), 1, False)
         # self.conv.classifier = deeplabv3.DeepLabHead(512, 1)
 
-        # self.conv = DeepLayer3p(resnet18(), 1)
+        if self.params.arch == 'deeplab3p':
+            if self.params.deeplab_backbone_params == 'resnet18':
+                backbone = resnet18()
+            elif isinstance(self.params.deeplab_backbone_params, BaseParameters):
+                backbone = self.params.deeplab_backbone_params.cls(self.params.deeplab_backbone_params)
+            if self.params.deeplab_backbone_ckp_path:
+                ckp = torch.load(self.params.deeplab_backbone_ckp_path)
+                sd = ckp['state_dict']
+                ckp['state_dict'] = {k[k.find('resnet'):]:v for k,v in sd.items() if 'resnet' in k}
+                print(f'loading resnet backbone from {self.params.deeplab_backbone_ckp_path}...')
+                p1 = torch.nn.utils.parameters_to_vector(backbone.parameters())
+                load_params_into_model(src_model=ckp, tgt_model=backbone)
+                p2 = torch.nn.utils.parameters_to_vector(backbone.parameters())
+                # print(torch.norm(p2-p1))
+                print('backbone loaded!')
+            if self.params.freeze_deeplab_backbone:
+                backbone.requires_grad_(False)
+            if isinstance(backbone, ResNet):
+                backbone = IntermediateLayerGetter(backbone, {'layer1':'low_level_feats', 'layer4':'out'})
+                self.conv = DeepLab3p(backbone, 1)
+            elif isinstance(backbone, XResNet34):
+                backbone = IntermediateLayerGetter(backbone.resnet, {'4':'low_level_feats', '7':'out'})
+                self.conv = DeepLab3p(backbone, 1, hl_channels=1024, ll_channels=128)
+            else:
+                raise ValueError(f'backbone must be a subclass of either torchvision.models.ResNet or adversarialML.biologically_inspired_models.src.models.XResNet34 but got {type(backbone)}')
         self.pyramid = GaussianPyramid(5)
         
     def preprocess(self, x):
@@ -193,29 +224,48 @@ class FixationPredictionNetwork(AbstractModel):
         return x
     
     def reshape_target(self, y):
-        n = int(np.sqrt(y.shape[-1]))
-        y = y.reshape(y.shape[0], 1, n, n)
+        if y.dim() == 2:
+            n = int(np.sqrt(y.shape[-1]))
+            y = y.reshape(y.shape[0], 1, n, n)
         return y
 
     def upsample_target(self, y, size):
         y = torch.nn.functional.interpolate(y, size=size)
         return y
+    
+    def standardize_heatmap(self, y):
+        std, mean = torch.std_mean(y, (2,3), False, keepdim=True)
+        y = (y-mean)/(std + 1e-5)
+        return y
 
     def compute_loss(self, x, y, return_logits=True):
-        y = self.reshape_target(y)
         logits = self.forward(x)
+
+        y = self.reshape_target(y)
         y_us = self.upsample_target(y, logits.shape[2:])
         logit_levels = self.pyramid(logits)
         y_levels = self.pyramid(y_us)
         # print(y.shape, y_us.shape, [y_.shape for y_ in y_levels])
-        assert y_levels[-1].shape == y.shape
-        y_levels[-1] = y
+        for i,y_ in enumerate(y_levels):
+            if y_.shape == y.shape:
+                y_levels[i] = y
         loss = 0
         for yl, ylp in zip(y_levels, logit_levels):
-            npos = yl.sum()
-            poswt = (torch.numel(yl)-npos)/npos
-            # print(logits.dtype, logits.shape, y.dtype, y.shape)
-            loss += nn.BCEWithLogitsLoss(pos_weight=poswt)(ylp, yl)
+            if self.params.loss_fn == 'bce':
+                npos = yl.sum()
+                poswt = (torch.numel(yl)-npos)/npos
+                loss_ = nn.BCEWithLogitsLoss(pos_weight=poswt, reduction='none')(ylp, yl)
+            elif self.params.loss_fn == 'mse':
+                ylp = self.standardize_heatmap(ylp)
+                yl = self.standardize_heatmap(yl)
+                mask = 1 - ((yl < 0) & (ylp < 0)).float()
+                loss_ = nn.MSELoss(reduction='none')(ylp, yl) * mask
+            if self.params.partially_mask_loss:
+                mask = (torch.rand_like(yl) <= np.random.uniform(1/float(torch.numel(yl)), 1)).float()
+                loss_ = (loss_ * mask).sum()/mask.sum()
+            else:
+                loss_ = loss_.mean()
+            loss += loss_
         loss /= len(y_levels)
         if return_logits:
             return logits[-1], loss
@@ -263,7 +313,7 @@ class FixationHeatmapPredictionNetwork(AbstractModel):
     def _make_network(self):
         self.preprocessor = self.params.preprocessing_params.cls(self.params.preprocessing_params)
         self.pyramid = GaussianPyramid(5)
-        self.heatmap_predictor = DeepLayer3p(resnet18(), 1)
+        self.heatmap_predictor = DeepLab3p(resnet18(), 1)
         # self._create_convs()
         # self.conv = nn.Sequential(
         #     convbnrelu(3, 16, 7, 1, 3),
@@ -343,6 +393,9 @@ class RetinaFilterFixationPrediction(AbstractModel):
         retina_params: BaseParameters = None
         fixation_params: BaseParameters = None
         fixation_model_ckp: str = None
+        freeze_fixation_model: bool = True
+        target_downsample_factor: int = 32
+        num_samples: int = 1
     
     def __init__(self, params: BaseParameters) -> None:
         super().__init__(params)
@@ -354,8 +407,10 @@ class RetinaFilterFixationPrediction(AbstractModel):
     def _make_network(self):
         self.preprocessor = self.params.preprocessing_params.cls(self.params.preprocessing_params)
         self.retina = self.params.retina_params.cls(self.params.retina_params)
-        self.retina.loc_mode = 'const'
+        self.retina.loc_mode = self.retina.params.loc_mode = 'const'
         self.fixation_model = self.params.fixation_params.cls(self.params.fixation_params)
+        if self.params.freeze_fixation_model:
+            self.fixation_model.requires_grad_(False)
 
     def _maybe_load_ckp(self):
         if (self.params.fixation_model_ckp is not None) and (not self.ckp_loaded):
@@ -377,42 +432,101 @@ class RetinaFilterFixationPrediction(AbstractModel):
             if self.training:
                 flat_fmap = fmap.reshape(-1)
                 sample = nn.functional.gumbel_softmax(flat_fmap, tau=5)
-                fmap = sample.reshape(fmap.shape)
-            loc = (fmap==torch.max(fmap)).nonzero()[0].cpu().detach().numpy()
-            loc = self.loc_offset - loc
-            loc[loc < 0] = 0
+                loc_importance_map = sample.reshape(fmap.shape)
+            else:
+                loc_importance_map = fmap
+            loc = (loc_importance_map==torch.max(loc_importance_map)).nonzero()[0].cpu().detach().numpy()
+            if isinstance(self.retina, RBlur2):
+                loc = self.loc_offset - loc
+                loc[loc < 0] = 0
         else:
             locidx = int(torch.argmax(fmap).cpu().detach())
             col_locs = np.linspace(0, x.shape[2]-1, int(np.sqrt(fmap.shape[0])), dtype=np.int32)
             row_locs = np.linspace(0, x.shape[1]-1, int(np.sqrt(fmap.shape[0])), dtype=np.int32)
             col = col_locs[locidx % len(col_locs)]
             row = row_locs[locidx // len(col_locs)]
-            loc = (max(0, self.loc_offset[0]-row), max(0, self.loc_offset[1]-col))
-        return loc
+            if isinstance(self.retina, RBlur2):
+                loc = (max(0, self.loc_offset[0]-row), max(0, self.loc_offset[1]-col))
+            else:
+                loc = (row, col)
+        return tuple(loc)
 
+    def get_loc_from_fmaps(self, fmaps):
+        if fmaps.dim() > 2:
+            downsample_factor = self.params.target_downsample_factor
+            if downsample_factor > 1:
+                fmaps = nn.functional.avg_pool2d(fmaps, downsample_factor, stride=downsample_factor)
+            w = fmaps.shape[3] # assumes that fmaps is square
+            flat_fmaps = torch.flatten(fmaps, 1)
+            if self.training:
+                loc_importance_maps = nn.functional.gumbel_softmax(flat_fmaps, tau=5, dim=1)
+            else:
+                loc_importance_maps = flat_fmaps
+            loc_idxs = torch.argmax(loc_importance_maps, 1)
+            rows = (loc_idxs // w).detach().cpu().numpy()
+            cols = (loc_idxs % w).detach().cpu().numpy()
+            if downsample_factor > 1:
+                rows = rows * downsample_factor + downsample_factor//2
+                cols = cols * downsample_factor + downsample_factor//2
+            if isinstance(self.retina, RBlur2):
+                rows = torch.relu(self.loc_offset - rows)
+                cols = torch.relu(self.loc_offset - cols)
+            locs = list(zip(rows, cols))
+        return locs
+            
 
     def forward(self, x):
         if not self.ckp_loaded:
             self._maybe_load_ckp()
         x = self.preprocess(x)
-        self.retina.params.loc = tuple(self.loc_offset - np.array(x.shape[2:])//2)
-        x = self.retina(x)
-        fixation_maps = self.fixation_model(x)
-        out = []
-        for fmap, x_ in zip(fixation_maps,x):
-            fmap = fmap.squeeze()
-            # if fmap.dim() > 1:
-            #     loc = (fmap==torch.max(fmap)).nonzero()[0].cpu().detach().numpy()
-            #     loc = self.loc_offset - loc
-            #     loc[loc < 0] = 0
-            loc = self.get_loc_from_fmap(x_, fmap)
-            self.retina.params.loc = loc
-            x_ = x_.unsqueeze(0)
-            x_ = self.preprocess(x_)
+        if isinstance(self.retina, RBlur2):
+            self.retina.params.loc = tuple(self.loc_offset - np.array(x.shape[2:])//2)
+        else:
+            self.retina.params.loc = tuple(np.array(x.shape[2:])//2)
+        x_blurred = self.retina(x)
+        fixation_maps = self.fixation_model(x_blurred)
+        locs = self.get_loc_from_fmaps(fixation_maps)
+        loc_set = list(set(locs))
+        loc_set = np.expand_dims(np.array(loc_set), 1)
+        locs = np.array(locs)
+        # print(locs)
+
+        x_out = torch.zeros_like(x)
+        for loc in loc_set:
+            # print(loc, (locs == loc).all(1))
+            x_ = x[(locs == loc).all(1)]
+            # print(x_.shape)
+            self.retina.params.loc = tuple(loc[0])
             x_ = self.retina(x_)
-            out.append(x_)
-        x = torch.cat(out, 0)
-        return x
+            x_out[(locs == loc).all(1)] = x_
+            
+        # out = []
+        # for loc, x_ in zip(locs,x):
+        #     # fmap = fmap.squeeze()
+        #     # loc = self.get_loc_from_fmap(x_, fmap)
+        #     self.retina.params.loc = loc
+        #     # print(f'in RetinaFilterFixationPrediction, loc = {loc}')
+        #     x_ = x_.unsqueeze(0)
+        #     x_ = self.retina(x_)
+        #     out.append(x_)
+        # x_out = torch.cat(out, 0)
+        
+        # def convert_image_tensor_to_ndarray(img):
+        #     return img.cpu().detach().transpose(0,1).transpose(1,2).numpy()
+        # plt.subplot(1,3,1)
+        # plt.imshow(convert_image_tensor_to_ndarray(x_out[0]))
+        # plt.subplot(1,3,2)
+        # fmap = fixation_maps[0]
+        # fmap = torch.nn.functional.gumbel_softmax(fmap, tau=5, hard=False)
+        # plt.imshow(convert_image_tensor_to_ndarray(fmap))
+        # loc = tuple(self.get_loc_from_fmap(x[0], fixation_maps[0].squeeze()))
+        # plt.title(f'fixation_point={locs[0]} ({loc})')
+        # plt.subplot(1,3,3)
+        # self.retina.params.loc = loc
+        # plt.imshow(convert_image_tensor_to_ndarray(self.retina(x[[0]])[0]))
+        # plt.savefig('fixation_prediction/fixation_prediction_img.png')
+        # exit()
+        return x_out
 
     def compute_loss(self, x, y, return_logits=True):
         logits = self.forward(x)
