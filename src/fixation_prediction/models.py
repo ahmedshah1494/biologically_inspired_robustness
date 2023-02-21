@@ -15,9 +15,87 @@ from torchvision.models.segmentation import fcn_resnet50, fcn, deeplabv3_resnet5
 from torchvision.models.resnet import resnet18, ResNet
 from torchvision.models._utils import IntermediateLayerGetter
 from matplotlib import pyplot as plt
+import math
 
 from adversarialML.biologically_inspired_models.src.models import CommonModelParams, ConvEncoder, XResNet34, convbnrelu, bnrelu
 from adversarialML.biologically_inspired_models.src.retina_blur2 import RetinaBlurFilter as RBlur2
+
+def log1mexp(x: torch.Tensor) -> torch.Tensor:
+    """Numerically accurate evaluation of log(1 - exp(x)) for x < 0.
+    See [Maechler2012accurate]_ for details.
+    copied from https://github.com/pytorch/pytorch/issues/39242
+    """
+    mask = -math.log(2) < x  # x < 0
+    return torch.where(
+        mask,
+        (-x.expm1()).log(),
+        (-x.exp()).log1p(),
+    )
+
+def add_gumbel_noise(logits):
+    gumbels = (
+        -torch.empty_like(logits, memory_format=torch.legacy_contiguous_format).exponential_().log()
+    )  # ~Gumbel(0,1)
+    return gumbels
+
+def gumbel_softmax(logits: torch.Tensor, tau: float = 1, hard: bool = False, eps: float = 1e-10, log: bool = False, dim: int = -1) -> torch.Tensor:
+    r"""
+    Samples from the Gumbel-Softmax distribution (`Link 1`_  `Link 2`_) and optionally discretizes.
+
+    Args:
+      logits: `[..., num_features]` unnormalized log probabilities
+      tau: non-negative scalar temperature
+      hard: if ``True``, the returned samples will be discretized as one-hot vectors,
+            but will be differentiated as if it is the soft sample in autograd
+      dim (int): A dimension along which softmax will be computed. Default: -1.
+
+    Returns:
+      Sampled tensor of same shape as `logits` from the Gumbel-Softmax distribution.
+      If ``hard=True``, the returned samples will be one-hot, otherwise they will
+      be probability distributions that sum to 1 across `dim`.
+
+    .. note::
+      This function is here for legacy reasons, may be removed from nn.Functional in the future.
+
+    .. note::
+      The main trick for `hard` is to do  `y_hard - y_soft.detach() + y_soft`
+
+      It achieves two things:
+      - makes the output value exactly one-hot
+      (since we add then subtract y_soft value)
+      - makes the gradient equal to y_soft gradient
+      (since we strip all other gradients)
+
+    Examples::
+        >>> logits = torch.randn(20, 32)
+        >>> # Sample soft categorical using reparametrization trick:
+        >>> F.gumbel_softmax(logits, tau=1, hard=False)
+        >>> # Sample hard categorical using "Straight-through" trick:
+        >>> F.gumbel_softmax(logits, tau=1, hard=True)
+
+    .. _Link 1:
+        https://arxiv.org/abs/1611.00712
+    .. _Link 2:
+        https://arxiv.org/abs/1611.01144
+    """
+    gumbels = (
+        -torch.empty_like(logits, memory_format=torch.legacy_contiguous_format).exponential_().log()
+    )  # ~Gumbel(0,1)
+    gumbels = (logits + gumbels) / tau  # ~Gumbel(logits,tau)
+    if log:
+        y_soft = gumbels.log_softmax(dim)
+    else:
+        y_soft = gumbels.softmax(dim)
+
+    if hard:
+        # Straight through.
+        index = y_soft.max(dim, keepdim=True)[1]
+        y_hard = torch.zeros_like(logits, memory_format=torch.legacy_contiguous_format).scatter_(dim, index, 1.0)
+        ret = y_hard - y_soft.detach() + y_soft
+    else:
+        # Reparametrization trick.
+        ret = y_soft
+    return ret
 
 class SkipConnection(nn.Sequential):
     def __init__(self, *block_layers) -> None:
@@ -154,9 +232,9 @@ class FixationPredictionNetwork(AbstractModel):
         common_params: CommonModelParams = field(factory=CommonModelParams)
         arch: str = 'unet'
         preprocessing_params: BaseParameters = None
-        deeplab_backbone_params: Union[BaseParameters, str] = 'resnet18'
-        deeplab_backbone_ckp_path: str = None
-        freeze_deeplab_backbone: bool = False
+        backbone_params: Union[BaseParameters, str, nn.Module] = 'resnet18'
+        backbone_ckp_path: str = None
+        freeze_backbone: bool = False
         partially_mask_loss: bool = False
         loss_fn: str = 'bce'
 
@@ -184,21 +262,23 @@ class FixationPredictionNetwork(AbstractModel):
         # self.conv.classifier = deeplabv3.DeepLabHead(512, 1)
 
         if self.params.arch == 'deeplab3p':
-            if self.params.deeplab_backbone_params == 'resnet18':
+            if self.params.backbone_params == 'resnet18':
                 backbone = resnet18()
-            elif isinstance(self.params.deeplab_backbone_params, BaseParameters):
-                backbone = self.params.deeplab_backbone_params.cls(self.params.deeplab_backbone_params)
-            if self.params.deeplab_backbone_ckp_path:
-                ckp = torch.load(self.params.deeplab_backbone_ckp_path)
+            elif isinstance(self.params.backbone_params, BaseParameters):
+                backbone = self.params.backbone_params.cls(self.params.backbone_params)
+            elif isinstance(self.params.backbone_params, nn.Module):
+                backbone = self.params.backbone_params
+            if self.params.backbone_ckp_path:
+                ckp = torch.load(self.params.backbone_ckp_path)
                 sd = ckp['state_dict']
                 ckp['state_dict'] = {k[k.find('resnet'):]:v for k,v in sd.items() if 'resnet' in k}
-                print(f'loading resnet backbone from {self.params.deeplab_backbone_ckp_path}...')
+                print(f'loading resnet backbone from {self.params.backbone_ckp_path}...')
                 p1 = torch.nn.utils.parameters_to_vector(backbone.parameters())
                 load_params_into_model(src_model=ckp, tgt_model=backbone)
                 p2 = torch.nn.utils.parameters_to_vector(backbone.parameters())
                 # print(torch.norm(p2-p1))
                 print('backbone loaded!')
-            if self.params.freeze_deeplab_backbone:
+            if self.params.freeze_backbone:
                 backbone.requires_grad_(False)
             if isinstance(backbone, ResNet):
                 backbone = IntermediateLayerGetter(backbone, {'layer1':'low_level_feats', 'layer4':'out'})
@@ -385,7 +465,7 @@ class FixationHeatmapPredictionNetwork(AbstractModel):
         else:
             return loss
 
-class RetinaFilterFixationPrediction(AbstractModel):
+class RetinaFilterWithFixationPrediction(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
         common_params: CommonModelParams = field(factory=CommonModelParams)
@@ -395,14 +475,15 @@ class RetinaFilterFixationPrediction(AbstractModel):
         fixation_model_ckp: str = None
         freeze_fixation_model: bool = True
         target_downsample_factor: int = 32
-        num_samples: int = 1
+        loc_sampling_temp: float = 5.
     
-    def __init__(self, params: BaseParameters) -> None:
+    def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
         self.params = params
         self._make_network()
         self.ckp_loaded = False
         self.loc_offset = np.array(self.retina.input_shape[1:])//2
+        self.interim_outputs = {}
     
     def _make_network(self):
         self.preprocessor = self.params.preprocessing_params.cls(self.params.preprocessing_params)
@@ -458,11 +539,15 @@ class RetinaFilterFixationPrediction(AbstractModel):
                 fmaps = nn.functional.avg_pool2d(fmaps, downsample_factor, stride=downsample_factor)
             w = fmaps.shape[3] # assumes that fmaps is square
             flat_fmaps = torch.flatten(fmaps, 1)
+            loc_importance_maps = torch.log_softmax(flat_fmaps, 1)
             if self.training:
-                loc_importance_maps = nn.functional.gumbel_softmax(flat_fmaps, tau=5, dim=1)
+                loc_idxs = torch.argmax(
+                            gumbel_softmax(flat_fmaps, tau=self.params.loc_sampling_temp, dim=1, log=True)
+                        , 1)
             else:
-                loc_importance_maps = flat_fmaps
-            loc_idxs = torch.argmax(loc_importance_maps, 1)
+                loc_idxs = torch.argmax(loc_importance_maps, 1)
+            self.interim_outputs['loc_importance_maps'] = loc_importance_maps
+            self.interim_outputs['selected_loc_idxs'] = loc_idxs
             rows = (loc_idxs // w).detach().cpu().numpy()
             cols = (loc_idxs % w).detach().cpu().numpy()
             if downsample_factor > 1:
@@ -517,7 +602,7 @@ class RetinaFilterFixationPrediction(AbstractModel):
         # plt.imshow(convert_image_tensor_to_ndarray(x_out[0]))
         # plt.subplot(1,3,2)
         # fmap = fixation_maps[0]
-        # fmap = torch.nn.functional.gumbel_softmax(fmap, tau=5, hard=False)
+        # # fmap = torch.nn.functional.gumbel_softmax(fmap, tau=self.params.loc_sampling_temp, hard=False)
         # plt.imshow(convert_image_tensor_to_ndarray(fmap))
         # loc = tuple(self.get_loc_from_fmap(x[0], fixation_maps[0].squeeze()))
         # plt.title(f'fixation_point={locs[0]} ({loc})')
@@ -535,3 +620,61 @@ class RetinaFilterFixationPrediction(AbstractModel):
             return logits, loss
         else:
             return loss
+
+class TiedBackboneRetinaFixationPreditionClassifier(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        common_params: CommonModelParams = field(factory=CommonModelParams)
+        retina_filter_params: RetinaFilterWithFixationPrediction.ModelParams = None
+        backbone_params: BaseParameters = None
+
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.params = params
+        self._make_network()
+        self.forward(torch.rand(2, *(self.params.common_params.input_size)))
+
+    def _make_network(self):
+        self.backbone = self.params.backbone_params.cls(self.params.backbone_params)
+        self.params.retina_filter_params.fixation_params.backbone_params = self.backbone
+        self.retina_filter = self.params.retina_filter_params.cls(self.params.retina_filter_params)
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Dropout(self.params.common_params.dropout_p),
+            nn.LazyLinear(self.params.common_params.num_units)
+        )
+    
+    def preprocess(self, x):
+        return self.retina_filter(x)
+
+    def forward(self, x):
+        x_ret = self.retina_filter(x)
+        feat = self.backbone(x_ret)
+        logits = self.classifier(feat)
+        return logits
+    
+    def compute_loss(self, x, y, fixation_logits=None, return_logits=True, **kwargs):
+        loss = 0
+        if fixation_logits is not None:
+            x_ret, loss = self.retina_filter.compute_loss(x, fixation_logits, return_logits=True)
+            feat = self.backbone(x_ret)
+            logits = self.classifier(feat)
+        else:
+            logits = self.forward(x)
+        loss += nn.functional.cross_entropy(logits, y)
+        loc_importance_maps = self.retina_filter.interim_outputs.get('loc_importance_maps', None)
+        selected_locs = self.retina_filter.interim_outputs.get('selected_loc_idxs', None)
+        if (loc_importance_maps is not None) and (selected_locs is not None):
+            selected_loc_imp = loc_importance_maps[torch.arange(loc_importance_maps.shape[0]), selected_locs]
+            # is_correct = (torch.argmax(logits, 1) == y).float()
+            # fixation_loss = -(is_correct*selected_loc_imp + (1-is_correct)*log1mexp(selected_loc_imp)).mean()
+            is_correct = (torch.argmax(logits, 1) == y)
+            fixation_loss = -(selected_loc_imp[is_correct].sum() + log1mexp(selected_loc_imp[~is_correct]).sum())/selected_loc_imp.shape[0]
+            loss += fixation_loss
+
+        # if self.training:
+        #     print(logits[:2], loss)
+        output = (loss,)
+        if return_logits:
+            output = (logits,) + output
+        return output
