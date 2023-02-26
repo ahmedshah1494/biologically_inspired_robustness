@@ -16,6 +16,7 @@ from torchvision.models.resnet import resnet18, ResNet
 from torchvision.models._utils import IntermediateLayerGetter
 from matplotlib import pyplot as plt
 import math
+from einops import rearrange
 
 from adversarialML.biologically_inspired_models.src.models import CommonModelParams, ConvEncoder, XResNet34, convbnrelu, bnrelu
 from adversarialML.biologically_inspired_models.src.retina_blur2 import RetinaBlurFilter as RBlur2
@@ -476,6 +477,8 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
         freeze_fixation_model: bool = True
         target_downsample_factor: int = 32
         loc_sampling_temp: float = 5.
+        num_train_fixation_points: int = 1
+        num_eval_fixation_points: int = 1
     
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -541,22 +544,23 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
             flat_fmaps = torch.flatten(fmaps, 1)
             loc_importance_maps = torch.log_softmax(flat_fmaps, 1)
             if self.training:
-                loc_idxs = torch.argmax(
+                loc_idxs = torch.topk(
                             gumbel_softmax(flat_fmaps, tau=self.params.loc_sampling_temp, dim=1, log=True)
-                        , 1)
+                        , self.params.num_train_fixation_points, 1)[1]
             else:
-                loc_idxs = torch.argmax(loc_importance_maps, 1)
+                loc_idxs = torch.topk(loc_importance_maps, self.params.num_eval_fixation_points, 1)[1]
             self.interim_outputs['loc_importance_maps'] = loc_importance_maps
             self.interim_outputs['selected_loc_idxs'] = loc_idxs
-            rows = (loc_idxs // w).detach().cpu().numpy()
-            cols = (loc_idxs % w).detach().cpu().numpy()
+            rows = (loc_idxs // w).detach().cpu()
+            cols = (loc_idxs % w).detach().cpu()
             if downsample_factor > 1:
                 rows = rows * downsample_factor + downsample_factor//2
                 cols = cols * downsample_factor + downsample_factor//2
             if isinstance(self.retina, RBlur2):
                 rows = torch.relu(self.loc_offset - rows)
                 cols = torch.relu(self.loc_offset - cols)
-            locs = list(zip(rows, cols))
+            locs = torch.stack([rows, cols], -1)
+            # locs = list(zip(rows, cols))
         return locs
             
 
@@ -570,10 +574,15 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
             self.retina.params.loc = tuple(np.array(x.shape[2:])//2)
         x_blurred = self.retina(x)
         fixation_maps = self.fixation_model(x_blurred)
+
         locs = self.get_loc_from_fmaps(fixation_maps)
-        loc_set = list(set(locs))
+        n_locs_per_img = locs.shape[1]
+        locs = rearrange(locs, 'b n d -> (b n) d').numpy()
+        loc_set = list(set([tuple(l) for l in locs]))
         loc_set = np.expand_dims(np.array(loc_set), 1)
-        locs = np.array(locs)
+        
+        if n_locs_per_img > 1:
+            x = torch.repeat_interleave(x, n_locs_per_img, 0)
         # print(locs)
 
         x_out = torch.zeros_like(x)
@@ -585,6 +594,19 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
             x_ = self.retina(x_)
             x_out[(locs == loc).all(1)] = x_
             
+            
+        # out = []
+        # for loc, x_ in zip(locs,x):
+        #     # fmap = fmap.squeeze()
+        #     # loc = self.get_loc_from_fmap(x_, fmap)
+        #     self.retina.params.loc = loc
+        #     # print(f'in RetinaFilterFixationPrediction, loc = {loc}')
+        #     x_ = x_.unsqueeze(0)
+        #     x_ = self.retina(x_)
+        #     out.append(x_)
+        # x_out = torch.cat(out, 0)
+        
+        
         # out = []
         # for loc, x_ in zip(locs,x):
         #     # fmap = fmap.squeeze()
@@ -598,19 +620,21 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
         
         # def convert_image_tensor_to_ndarray(img):
         #     return img.cpu().detach().transpose(0,1).transpose(1,2).numpy()
-        # plt.subplot(1,3,1)
-        # plt.imshow(convert_image_tensor_to_ndarray(x_out[0]))
-        # plt.subplot(1,3,2)
-        # fmap = fixation_maps[0]
-        # # fmap = torch.nn.functional.gumbel_softmax(fmap, tau=self.params.loc_sampling_temp, hard=False)
-        # plt.imshow(convert_image_tensor_to_ndarray(fmap))
-        # loc = tuple(self.get_loc_from_fmap(x[0], fixation_maps[0].squeeze()))
-        # plt.title(f'fixation_point={locs[0]} ({loc})')
-        # plt.subplot(1,3,3)
-        # self.retina.params.loc = loc
-        # plt.imshow(convert_image_tensor_to_ndarray(self.retina(x[[0]])[0]))
+        # nrows = n_locs_per_img
+        # ncols = 2
+        # for k in range(n_locs_per_img):
+        #     plt.subplot(nrows,ncols,1+k*ncols)
+        #     plt.imshow(convert_image_tensor_to_ndarray(x_out[k]))
+        #     plt.subplot(nrows,ncols,2+k*ncols)
+        #     fmap = fixation_maps[0]
+        #     # fmap = torch.nn.functional.gumbel_softmax(fmap, tau=self.params.loc_sampling_temp, hard=False)
+        #     plt.imshow(convert_image_tensor_to_ndarray(fmap))
+        #     # loc = tuple(self.get_loc_from_fmap(x[0], fixation_maps[0].squeeze()))
+        #     plt.title(f'fixation_point={locs[k]}')
+        #     # plt.subplot(nrows,ncols,3+k*ncols)
+        #     # self.retina.params.loc = loc
+        #     # plt.imshow(convert_image_tensor_to_ndarray(self.retina(x[[k]])[0]))
         # plt.savefig('fixation_prediction/fixation_prediction_img.png')
-        # exit()
         return x_out
 
     def compute_loss(self, x, y, return_logits=True):
@@ -661,10 +685,17 @@ class TiedBackboneRetinaFixationPreditionClassifier(AbstractModel):
             logits = self.classifier(feat)
         else:
             logits = self.forward(x)
+        if self.training:
+            num_fixation_points = self.params.retina_filter_params.num_train_fixation_points
+        else:
+            num_fixation_points = self.params.retina_filter_params.num_eval_fixation_points
+        y = torch.repeat_interleave(y, num_fixation_points, 0)
         loss += nn.functional.cross_entropy(logits, y)
         loc_importance_maps = self.retina_filter.interim_outputs.get('loc_importance_maps', None)
         selected_locs = self.retina_filter.interim_outputs.get('selected_loc_idxs', None)
         if (loc_importance_maps is not None) and (selected_locs is not None):
+            loc_importance_maps = torch.repeat_interleave(loc_importance_maps, num_fixation_points, 0)
+            selected_locs = selected_locs.reshape(-1)
             selected_loc_imp = loc_importance_maps[torch.arange(loc_importance_maps.shape[0]), selected_locs]
             # is_correct = (torch.argmax(logits, 1) == y).float()
             # fixation_loss = -(is_correct*selected_loc_imp + (1-is_correct)*log1mexp(selected_loc_imp)).mean()
