@@ -2,14 +2,14 @@ import torchvision
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import NormalizationLayer
 from adversarialML.biologically_inspired_models.src.models import (
     CommonModelParams, GeneralClassifier, SequentialLayers, XResNet18,IdentityLayer, ConvEncoder, ConvParams)
-from adversarialML.biologically_inspired_models.src.fixation_prediction.models import FixationHeatmapPredictionNetwork, FixationPredictionNetwork, RetinaFilterFixationPrediction
+from adversarialML.biologically_inspired_models.src.fixation_prediction.models import FixationHeatmapPredictionNetwork, FixationPredictionNetwork, RetinaFilterWithFixationPrediction, TiedBackboneRetinaFixationPreditionClassifier
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import LinearLayer
 from adversarialML.biologically_inspired_models.src.retina_blur2 import RetinaBlurFilter as RBlur2
 from adversarialML.biologically_inspired_models.src.retina_preproc import (
     RetinaBlurFilter, RetinaNonUniformPatchEmbedding, RetinaWarp, GaussianNoiseLayer)
 from adversarialML.biologically_inspired_models.src.supconloss import \
     TwoCropTransform
-from adversarialML.biologically_inspired_models.src.trainers import LightningAdversarialTrainer, FixationPointLightningAdversarialTrainer,ClickmeImportanceMapLightningAdversarialTrainer
+from adversarialML.biologically_inspired_models.src.trainers import LightningAdversarialTrainer, FixationPointLightningAdversarialTrainer,ClickmeImportanceMapLightningAdversarialTrainer, RetinaFilterWithFixationPredictionLightningAdversarialTrainer
 from mllib.optimizers.configs import (AdamOptimizerConfig,
                                       CosineAnnealingWarmRestartsConfig,
                                       CyclicLRConfig, LinearLRConfig,
@@ -87,6 +87,19 @@ class Ecoset100Train400KNoisyRetinaBlur2WRandomScalesCyclicLR1e_1RandAugmentXRes
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.CenterCrop(self.imgs_size),
             ])
+        # p = get_ecoset100folder_params(num_train=500000, train_transforms=[
+        #         torchvision.transforms.Resize(self.imgs_size),
+        #         torchvision.transforms.RandomCrop(self.imgs_size),
+        #         torchvision.transforms.RandomHorizontalFlip(),
+        #         torchvision.transforms.RandAugment(magnitude=15)
+        #     ],
+        #     test_transforms=[
+        #         torchvision.transforms.Resize(self.imgs_size),
+        #         torchvision.transforms.CenterCrop(self.imgs_size),
+        #     ])
+        # # Pointing to a folder with only the test set, and some dummy train and val data. 
+        # # Use this on workhorse to avoid delay due to slow NFS.
+        # p.datafolder = f'{logdir_root}/ecoset-100/eval_dataset_dir'
         return p
 
     def get_model_params(self):
@@ -194,7 +207,7 @@ class Ecoset10Train18KNoisyRetinaBlur2S2500WRandomScalesFixationPointPredictor(A
             logdir=LOGDIR, batch_size=32
         )
 
-class Ecoset100Train70KNoisyRetinaBlur2S2500WRandomScalesFixationPointPredictor(AbstractTask):
+class Ecoset100Train70KNoisyRetinaBlur2WRandomScalesFixationPointPredictor(AbstractTask):
     imgs_size = 224
     input_size = [3, 1600, 1600]
     widen_factor = 2
@@ -247,7 +260,7 @@ class Ecoset100Train70KNoisyRetinaBlur2S2500WRandomScalesFixationPointPredictor(
             logdir=LOGDIR, batch_size=64
         )
 
-class Ecoset100Train70KNoisyRetinaBlurS2500WRandomScalesFixationPointPredictor(Ecoset100Train70KNoisyRetinaBlur2S2500WRandomScalesFixationPointPredictor):
+class Ecoset100Train70KNoisyRetinaBlurWRandomScalesFixationPointPredictor(Ecoset100Train70KNoisyRetinaBlur2WRandomScalesFixationPointPredictor):
     imgs_size = 224
     input_size = [3, imgs_size, imgs_size]
     def get_model_params(self):
@@ -262,9 +275,9 @@ class Ecoset100Train70KNoisyRetinaBlurS2500WRandomScalesFixationPointPredictor(E
                                             setup_feature_extraction=True, widen_stem=self.widen_stem)
         p = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
                                                     CommonModelParams([3, self.imgs_size, self.imgs_size],), 'deeplab3p', rp,
-                                                    deeplab_backbone_params=resnet_p, 
-                                                    deeplab_backbone_ckp_path='/share/workhorse3/mshah1/biologically_inspired_models/logs/ecoset100-0.0/Ecoset100Train400KNoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18/0/checkpoints/model_checkpoint.pt',
-                                                    freeze_deeplab_backbone=True)
+                                                    backbone_params=resnet_p, 
+                                                    backbone_ckp_path='/share/workhorse3/mshah1/biologically_inspired_models/logs/ecoset100-0.0/Ecoset100Train400KNoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18/0/checkpoints/model_checkpoint.pt',
+                                                    freeze_backbone=True)
         return p
 
     def get_experiment_params(self) -> BaseExperimentConfig:
@@ -276,8 +289,68 @@ class Ecoset100Train70KNoisyRetinaBlurS2500WRandomScalesFixationPointPredictor(E
                 )
             ),
             SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
-            OneCycleLRConfig(max_lr=0.05, epochs=nepochs, steps_per_epoch=1007//2, pct_start=0.1, anneal_strategy='linear'),
+            OneCycleLRConfig(max_lr=0.05, epochs=nepochs, steps_per_epoch=1007, pct_start=0.1, anneal_strategy='linear'),
             logdir=LOGDIR, batch_size=64
+        )
+
+class Ecoset100Train70KNoisyRetinaBlurWRandomScalesFixationPointPredictorMSELoss(Ecoset100Train70KNoisyRetinaBlur2WRandomScalesFixationPointPredictor):
+    imgs_size = 224
+    input_size = [3, imgs_size, imgs_size]
+    def get_model_params(self):
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, max_input_size=self.input_size, std=self.noise_std)
+        rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
+                                                rod_std=0.09, max_rod_density=0.12, view_scale=None, loc_mode='random_uniform')
+        normp = NormalizationLayer.get_params()
+        rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, self.num_classes), num_classes=self.num_classes,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor, setup_classification=False,
+                                            setup_feature_extraction=True, widen_stem=self.widen_stem)
+        p = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
+                                                    CommonModelParams([3, self.imgs_size, self.imgs_size],), 'deeplab3p', rp,
+                                                    loss_fn='mse',
+                                                    backbone_params=resnet_p, 
+                                                    backbone_ckp_path='/share/workhorse3/mshah1/biologically_inspired_models/logs/ecoset100-0.0/Ecoset100Train400KNoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18/0/checkpoints/model_checkpoint.pt',
+                                                    freeze_backbone=True)
+        return p
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 15
+        return BaseExperimentConfig(
+            FixationPointLightningAdversarialTrainer.TrainerParams(FixationPointLightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_loss',
+                    tracking_mode='min', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=504, pct_start=0.1, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=128
+        )
+
+class Ecoset100Train70KNoisyRetinaBlurWRandomScalesFixationPointPredictorResNet18(Ecoset100Train70KNoisyRetinaBlur2WRandomScalesFixationPointPredictor):
+    imgs_size = 224
+    input_size = [3, imgs_size, imgs_size]    
+    def get_model_params(self):
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, max_input_size=self.input_size, std=self.noise_std)
+        rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform', loc_mode='random_uniform')
+        rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        p = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
+                                                    CommonModelParams([3, self.imgs_size, self.imgs_size],), 'deeplab3p', rp,
+                                                    backbone_params='resnet18', loss_fn='mse')
+        return p
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 30
+        return BaseExperimentConfig(
+            FixationPointLightningAdversarialTrainer.TrainerParams(FixationPointLightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_loss',
+                    tracking_mode='min', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.05, epochs=nepochs, steps_per_epoch=504, pct_start=0.1, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=128
         )
 class ClickmeFixationHeatmapPredictor(AbstractTask):
     imgs_size = 224
@@ -395,7 +468,7 @@ class ClickmeNoisyRetinaBlurS2500WRandomScalesFixationHeatmapPredictor(ClickmeFi
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         p = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
                                                     CommonModelParams([3, self.imgs_size, self.imgs_size],), 'deeplab3p', rp,
-                                                    deeplab_backbone_params='resnet18', loss_fn='mse')
+                                                    backbone_params='resnet18', loss_fn='mse')
         # p = FixationHeatmapPredictionNetwork.ModelParams(FixationHeatmapPredictionNetwork,
         #                                             CommonModelParams([3, self.imgs_size, self.imgs_size],), rp)
         return p
@@ -448,7 +521,7 @@ class Ecoset10NoisyRetinaBlur2S2500WRandomScalesWClickmeFixationPredictionXResNe
         # fixp = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
         #                                             CommonModelParams([3, self.imgs_size, self.imgs_size],),
         #                                             None, normp, 49, rnoise_p)
-        retinafixp = RetinaFilterFixationPrediction.ModelParams(RetinaFilterFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
+        retinafixp = RetinaFilterWithFixationPrediction.ModelParams(RetinaFilterWithFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
                                                         fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/clickme-0.0/ClickmeNoisyRetinaBlur2S2500WRandomScalesFixationHeatmapPredictor/3/checkpoints/model_checkpoint.pt'
                                                         # fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/ecoset10wfixationmaps_folder-0.0/Ecoset10Train18KNoisyRetinaBlur2S2500WRandomScalesFixationPointPredictor/1/checkpoints/model_checkpoint.pt'
         )
@@ -507,7 +580,7 @@ class Ecoset10Train30KNoisyRetinaBlur2S2500WRandomScalesWFixationPredictionXResN
         #                                             CommonModelParams([3, self.imgs_size, self.imgs_size],), IdentityLayer.get_params())
         fixp = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
                                                     CommonModelParams([3, self.imgs_size, self.imgs_size],), 'unet', NormalizationLayer.get_params())
-        retinafixp = RetinaFilterFixationPrediction.ModelParams(RetinaFilterFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
+        retinafixp = RetinaFilterWithFixationPrediction.ModelParams(RetinaFilterWithFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
                                                         # fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/clickme-0.0/ClickmeNoisyRetinaBlur2S2500WRandomScalesFixationHeatmapPredictor/2/checkpoints/model_checkpoint.pt'
                                                         fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/ecoset10wfixationmaps_folder-0.0/Ecoset10Train18KNoisyRetinaBlur2S2500WRandomScalesFixationPointPredictor/4/checkpoints/model_checkpoint.pt'
         )
@@ -534,12 +607,12 @@ class Ecoset10Train30KNoisyRetinaBlur2S2500WRandomScalesWFixationPredictionXResN
             keys_to_freeze_regex = r'(.*resnet.*)',
         )
 
-class Ecoset100Train400KNoisyRetinaBlurS2500WRandomScalesWFixationPredictionXResNet2x18(AbstractTask):
+class Ecoset100Train400KNoisyRetinaBlurWRandomScalesWFixationPredictionXResNet2x18(AbstractTask):
     imgs_size = 224
-    input_size = [3, 1600, 1600]
+    input_size = [3, 224, 224]
     widen_factor = 2
     widen_stem = False
-    noise_std = 0.25
+    noise_std = 0.125
     num_classes = 100
     ckp = '/share/workhorse3/mshah1/biologically_inspired_models/logs/ecoset100-0.0/Ecoset100Train400KNoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18/0/checkpoints/model_checkpoint.pt'
     def get_dataset_params(self) :
@@ -553,6 +626,19 @@ class Ecoset100Train400KNoisyRetinaBlurS2500WRandomScalesWFixationPredictionXRes
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.CenterCrop(self.imgs_size),
             ])
+        # p = get_ecoset100folder_params(num_train=500000, train_transforms=[
+        #         torchvision.transforms.Resize(self.imgs_size),
+        #         torchvision.transforms.RandomCrop(self.imgs_size),
+        #         torchvision.transforms.RandomHorizontalFlip(),
+        #         torchvision.transforms.RandAugment(magnitude=15)
+        #     ],
+        #     test_transforms=[
+        #         torchvision.transforms.Resize(self.imgs_size),
+        #         torchvision.transforms.CenterCrop(self.imgs_size),
+        #     ])
+        # # Pointing to a folder with only the test set, and some dummy train and val data. 
+        # # Use this on workhorse to avoid delay due to slow NFS.
+        # p.datafolder = f'{logdir_root}/ecoset-100/eval_dataset_dir'
         return p
 
     def get_model_params(self):
@@ -565,14 +651,15 @@ class Ecoset100Train400KNoisyRetinaBlurS2500WRandomScalesWFixationPredictionXRes
                                             setup_feature_extraction=True, widen_stem=self.widen_stem)
         fixp = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
                                                     CommonModelParams([3, self.imgs_size, self.imgs_size],), 'deeplab3p', IdentityLayer.get_params(),
-                                                    deeplab_backbone_params=resnet_p, 
-                                                    deeplab_backbone_ckp_path=self.ckp,
-                                                    freeze_deeplab_backbone=True)
-        retinafixp = RetinaFilterFixationPrediction.ModelParams(RetinaFilterFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
+                                                    backbone_params=resnet_p, 
+                                                    backbone_ckp_path=self.ckp,
+                                                    freeze_backbone=True)
+        retinafixp = RetinaFilterWithFixationPrediction.ModelParams(RetinaFilterWithFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
                                                         # fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/clickme-0.0/ClickmeNoisyRetinaBlur2S2500WRandomScalesFixationHeatmapPredictor/2/checkpoints/model_checkpoint.pt'
-                                                        fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/ecoset100wfixationmaps_folder-0.0/Ecoset100Train70KNoisyRetinaBlurS2500WRandomScalesFixationPointPredictor/0/checkpoints/model_checkpoint.pt'
+                                                        fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/ecoset100wfixationmaps_folder-0.0/Ecoset100Train70KNoisyRetinaBlurWRandomScalesFixationPointPredictor/1/checkpoints/model_checkpoint.pt'
         )
         rp = SequentialLayers.ModelParams(SequentialLayers, [IdentityLayer.get_params(), retinafixp, resnet_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        # rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p, resnet_p], CommonModelParams(self.input_size, activation=nn.Identity))
         cp = LinearLayer.ModelParams(LinearLayer, CommonModelParams(self.input_size, self.num_classes, activation=nn.Identity))
         p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, cp)
         return p
@@ -595,7 +682,115 @@ class Ecoset100Train400KNoisyRetinaBlurS2500WRandomScalesWFixationPredictionXRes
             keys_to_freeze_regex = r'(.*resnet.*)',
         )
 
-class Ecoset100PreTrain400KNoisyRetinaBlurS2500WRandomScalesWClickmeFixationPredictionXResNet2x18(AbstractTask):
+class Ecoset100PreTrain400KNoisyRetinaBlurWRandomScalesWClickmeFixationPredictionXResNet2x18(AbstractTask):
+    imgs_size = 224
+    input_size = [3, 224, 224]
+    widen_factor = 2
+    widen_stem = False
+    noise_std = 0.125
+    num_classes = 100
+    ckp = '/share/workhorse3/mshah1/biologically_inspired_models/logs/ecoset100-0.0/Ecoset100Train400KNoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18/0/checkpoints/model_checkpoint.pt'
+    def get_dataset_params(self) :
+        p = get_ecoset100shards_params(num_test=10, train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        # p = get_ecoset100folder_params(num_train=500000, train_transforms=[
+        #         torchvision.transforms.Resize(self.imgs_size),
+        #         torchvision.transforms.RandomCrop(self.imgs_size),
+        #         torchvision.transforms.RandomHorizontalFlip(),
+        #         torchvision.transforms.RandAugment(magnitude=15)
+        #     ],
+        #     test_transforms=[
+        #         torchvision.transforms.Resize(self.imgs_size),
+        #         torchvision.transforms.CenterCrop(self.imgs_size),
+        #     ])
+        # # Pointing to a folder with only the test set, and some dummy train and val data. 
+        # # Use this on workhorse to avoid delay due to slow NFS.
+        # p.datafolder = f'{logdir_root}/ecoset-100/eval_dataset_dir'
+        return p
+
+    def get_model_params(self):
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, max_input_size=self.input_size, std=self.noise_std)
+        rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform', loc_mode='random_uniform')
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, self.num_classes), num_classes=self.num_classes,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor, setup_classification=False,
+                                            setup_feature_extraction=True, widen_stem=self.widen_stem)
+        fixp = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
+                                                    CommonModelParams([3, self.imgs_size, self.imgs_size],), 'deeplab3p', IdentityLayer.get_params(),
+                                                    backbone_params='resnet18', loss_fn='mse')
+        retinafixp = RetinaFilterWithFixationPrediction.ModelParams(RetinaFilterWithFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
+                                                        # fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/clickme-0.0/ClickmeNoisyRetinaBlur2S2500WRandomScalesFixationHeatmapPredictor/2/checkpoints/model_checkpoint.pt'
+                                                        fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/clickme-0.0/ClickmeNoisyRetinaBlurS2500WRandomScalesFixationHeatmapPredictor/0/checkpoints/model_checkpoint.pt'
+        )
+        rp = SequentialLayers.ModelParams(SequentialLayers, [IdentityLayer.get_params(), retinafixp, resnet_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        # rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p, resnet_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        cp = LinearLayer.ModelParams(LinearLayer, CommonModelParams(self.input_size, self.num_classes, activation=nn.Identity))
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, cp)
+        return p
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 5
+        return TransferLearningExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.005, epochs=nepochs, steps_per_epoch=1849, pct_start=0.2, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=64,
+            seed_model_path=self.ckp,
+            # # keys_to_skip_regex = r'(.*resnet.[6-7].*|classifier.classifier.*)',
+            # keys_to_freeze_regex = r'(.*resnet.*)',
+        )
+
+class Ecoset100PreTrainedNoisyRetinaBlurWRandomScalesWClickmeFixationPredictionXResNet2x18FineTune(Ecoset100PreTrain400KNoisyRetinaBlurWRandomScalesWClickmeFixationPredictionXResNet2x18):
+    ckp = '/share/workhorse3/mshah1/biologically_inspired_models/iclr22_logs/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/0/checkpoints/model_checkpoint.pt'
+
+    def get_model_params(self):
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, max_input_size=self.input_size, std=self.noise_std)
+        rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform', loc_mode='random_uniform')
+        fixp = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
+                                                    CommonModelParams([3, self.imgs_size, self.imgs_size],), 'deeplab3p', IdentityLayer.get_params(),
+                                                    backbone_params='resnet18', loss_fn='mse')
+        retinafixp = RetinaFilterWithFixationPrediction.ModelParams(RetinaFilterWithFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
+                                                        fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/clickme-0.0/ClickmeNoisyRetinaBlurS2500WRandomScalesFixationHeatmapPredictor/0/checkpoints/model_checkpoint.pt'
+        )
+        rp = SequentialLayers.ModelParams(SequentialLayers, [IdentityLayer.get_params(), retinafixp], CommonModelParams(self.input_size, activation=nn.Identity))
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, self.num_classes), num_classes=self.num_classes,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, resnet_p)
+        return p
+
+class Ecoset100NoisyRetinaBlurWRandomScalesWClickmeFixationPredictionXResNet2x18(Ecoset100PreTrainedNoisyRetinaBlurWRandomScalesWClickmeFixationPredictionXResNet2x18FineTune):
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 40
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=1834, pct_start=0.1, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=64 # 4 GPUs to get 256 bs
+        )
+
+class Ecoset100PreTrainedNoisyRetinaBlurWRandomScalesWClickmeFixationPredictionXResNet2x18(Ecoset100PreTrainedNoisyRetinaBlurWRandomScalesWClickmeFixationPredictionXResNet2x18FineTune):
+    pass
+
+class Ecoset100PreTrain400KNoisyRetinaBlurWRandomScalesWFixationPredictionXResNet2x18FineTune(AbstractTask):
     imgs_size = 224
     input_size = [3, 224, 224]
     widen_factor = 2
@@ -626,10 +821,10 @@ class Ecoset100PreTrain400KNoisyRetinaBlurS2500WRandomScalesWClickmeFixationPred
                                             setup_feature_extraction=True, widen_stem=self.widen_stem)
         fixp = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
                                                     CommonModelParams([3, self.imgs_size, self.imgs_size],), 'deeplab3p', IdentityLayer.get_params(),
-                                                    deeplab_backbone_params='resnet18', loss_fn='mse')
-        retinafixp = RetinaFilterFixationPrediction.ModelParams(RetinaFilterFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
+                                                    backbone_params='resnet18', loss_fn='mse')
+        retinafixp = RetinaFilterWithFixationPrediction.ModelParams(RetinaFilterWithFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
                                                         # fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/clickme-0.0/ClickmeNoisyRetinaBlur2S2500WRandomScalesFixationHeatmapPredictor/2/checkpoints/model_checkpoint.pt'
-                                                        fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/clickme-0.0/ClickmeNoisyRetinaBlurS2500WRandomScalesFixationHeatmapPredictor/0/checkpoints/model_checkpoint.pt'
+                                                        fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/ecoset100wfixationmaps_folder-0.0/Ecoset100Train70KNoisyRetinaBlurWRandomScalesFixationPointPredictor/0/checkpoints/model_checkpoint.pt'
         )
         rp = SequentialLayers.ModelParams(SequentialLayers, [IdentityLayer.get_params(), retinafixp, resnet_p], CommonModelParams(self.input_size, activation=nn.Identity))
         # rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p, resnet_p], CommonModelParams(self.input_size, activation=nn.Identity))
@@ -646,43 +841,86 @@ class Ecoset100PreTrain400KNoisyRetinaBlurS2500WRandomScalesWClickmeFixationPred
                 )
             ),
             SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
-            OneCycleLRConfig(max_lr=0.005, epochs=nepochs, steps_per_epoch=1849, pct_start=0.2, anneal_strategy='linear'),
+            OneCycleLRConfig(max_lr=0.005, epochs=nepochs, steps_per_epoch=1834, pct_start=0.2, anneal_strategy='linear'),
             logdir=LOGDIR, batch_size=64,
             seed_model_path=self.ckp,
             # # keys_to_skip_regex = r'(.*resnet.[6-7].*|classifier.classifier.*)',
             # keys_to_freeze_regex = r'(.*resnet.*)',
         )
 
-class Ecoset100PreTrainedNoisyRetinaBlurS2500WRandomScalesWClickmeFixationPredictionXResNet2x18FineTune(Ecoset100PreTrain400KNoisyRetinaBlurS2500WRandomScalesWClickmeFixationPredictionXResNet2x18):
-    ckp = '/share/workhorse3/mshah1/biologically_inspired_models/iclr22_logs/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/0/checkpoints/model_checkpoint.pt'
+class Ecoset100NoisyRetinaBlurWRandomScalesWTiedBackboneFixationPredictionXResNet2x18(AbstractTask):
+    imgs_size = 224
+    input_size = [3, 224, 224]
+    widen_factor = 2
+    widen_stem = False
+    noise_std = 0.125
+    num_classes = 100
+    tau0 = 15
+    tauN = 1
+    def get_dataset_params(self) :
+        # p = get_ecoset100shards_params(num_test=10, train_transforms=[
+        #         torchvision.transforms.Resize(self.imgs_size),
+        #         torchvision.transforms.RandomCrop(self.imgs_size),
+        #         torchvision.transforms.RandomHorizontalFlip(),
+        #         torchvision.transforms.RandAugment(magnitude=15)
+        #     ],
+        #     test_transforms=[
+        #         torchvision.transforms.Resize(self.imgs_size),
+        #         torchvision.transforms.CenterCrop(self.imgs_size),
+        #     ])
+        # p = get_ecoset100folder_params(num_train=500000, train_transforms=[
+        #         torchvision.transforms.Resize(self.imgs_size),
+        #         torchvision.transforms.RandomCrop(self.imgs_size),
+        #         torchvision.transforms.RandomHorizontalFlip(),
+        #         torchvision.transforms.RandAugment(magnitude=15)
+        #     ],
+        #     test_transforms=[
+        #         torchvision.transforms.Resize(self.imgs_size),
+        #         torchvision.transforms.CenterCrop(self.imgs_size),
+        #     ])
+        # # Pointing to a folder with only the test set, and some dummy train and val data. 
+        # # Use this on workhorse to avoid delay due to slow NFS.
+        # p.datafolder = f'{logdir_root}/ecoset-100/eval_dataset_dir'
+        p = get_dataset_params(f'{logdir_root}/ecoset-100/400K-70K/70K', SupportedDatasets.ECOSET100wFIXATIONMAPS_FOLDER, num_train=70000, num_test=5000,
+                train_transforms=[
+                        torchvision.transforms.Resize(self.imgs_size),
+                        torchvision.transforms.CenterCrop(self.imgs_size),
+                    ],
+                test_transforms=[
+                    torchvision.transforms.Resize(self.imgs_size),
+                    torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        return p
 
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, max_input_size=self.input_size, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
                                                 rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform', loc_mode='random_uniform')
-        fixp = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
-                                                    CommonModelParams([3, self.imgs_size, self.imgs_size],), 'deeplab3p', IdentityLayer.get_params(),
-                                                    deeplab_backbone_params='resnet18', loss_fn='mse')
-        retinafixp = RetinaFilterFixationPrediction.ModelParams(RetinaFilterFixationPrediction,CommonModelParams(self.input_size), rnoise_p, rblur_p, fixp,
-                                                        fixation_model_ckp='/share/workhorse3/mshah1/biologically_inspired_models/logs/clickme-0.0/ClickmeNoisyRetinaBlurS2500WRandomScalesFixationHeatmapPredictor/0/checkpoints/model_checkpoint.pt'
-        )
-        rp = SequentialLayers.ModelParams(SequentialLayers, [IdentityLayer.get_params(), retinafixp], CommonModelParams(self.input_size, activation=nn.Identity))
         resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, self.num_classes), num_classes=self.num_classes,
                                             normalization_layer_params=NormalizationLayer.get_params(),
-                                            widen_factor=self.widen_factor)
-        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, resnet_p)
+                                            widen_factor=self.widen_factor, setup_classification=False,
+                                            setup_feature_extraction=True, widen_stem=self.widen_stem)
+        fixp = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
+                                                    CommonModelParams([3, self.imgs_size, self.imgs_size],), 'deeplab3p', IdentityLayer.get_params(),
+                                                    backbone_params=resnet_p, loss_fn='mse')
+        retinafixp = RetinaFilterWithFixationPrediction.ModelParams(RetinaFilterWithFixationPrediction,CommonModelParams(self.input_size), 
+                                                                    rnoise_p, rblur_p, fixation_params=fixp, freeze_fixation_model=False, 
+                                                                    target_downsample_factor=56, loc_sampling_temp=self.tau0)
+        p = TiedBackboneRetinaFixationPreditionClassifier.ModelParams(TiedBackboneRetinaFixationPreditionClassifier, CommonModelParams(self.input_size, self.num_classes), 
+                                                                        retinafixp, resnet_p)
         return p
 
-class Ecoset100NoisyRetinaBlurS2500WRandomScalesWClickmeFixationPredictionXResNet2x18(Ecoset100PreTrainedNoisyRetinaBlurS2500WRandomScalesWClickmeFixationPredictionXResNet2x18FineTune):
     def get_experiment_params(self) -> BaseExperimentConfig:
         nepochs = 40
+        steps_per_epoch = 1834
+        gamma = (self.tauN/self.tau0)**(1/(nepochs*steps_per_epoch))
         return BaseExperimentConfig(
-            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+            RetinaFilterWithFixationPredictionLightningAdversarialTrainer.TrainerParams(RetinaFilterWithFixationPredictionLightningAdversarialTrainer,
                 TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
                     tracking_mode='max', scheduler_step_after_epoch=False
-                )
+                ), loc_sampling_temp_decay_rate=gamma
             ),
             SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
-            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=1834, pct_start=0.1, anneal_strategy='linear'),
+            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=steps_per_epoch, pct_start=0.1, anneal_strategy='linear'),
             logdir=LOGDIR, batch_size=64 # 4 GPUs to get 256 bs
         )
