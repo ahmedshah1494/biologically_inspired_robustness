@@ -730,3 +730,33 @@ class ClickmeImportanceMapLightningAdversarialTrainer(FixationPointLightningAdve
     def test_step(self, batch, batch_idx):
         x,_,y = batch
         return super().test_step((x,y), batch_idx)
+
+class RetinaFilterWithFixationPredictionLightningAdversarialTrainer(LightningAdversarialTrainer):
+    @define(slots=False)    
+    class TrainerParams(LightningAdversarialTrainer.TrainerParams):
+        loc_sampling_temp_decay_rate: float = 1.
+    
+    def __init__(self, params: TrainerParams, *args, **kwargs):
+        super().__init__(params, *args, **kwargs)
+        self.tau = 0.
+
+    def decay_temperature(self):
+        if 'RetinaFilterWithFixationPrediction' not in locals():
+            from adversarialML.biologically_inspired_models.src.fixation_prediction.models import RetinaFilterWithFixationPrediction
+        for m in self.model.modules():
+            if isinstance(m, RetinaFilterWithFixationPrediction):
+                m.params.loc_sampling_temp *= self.params.loc_sampling_temp_decay_rate
+                break
+        self.tau = m.params.loc_sampling_temp
+        return self.tau
+    
+    def forward_step(self, batch, batch_idx):
+        outputs = super().forward_step(batch, batch_idx)
+        outputs['logs']['tau'] = self.tau
+        return outputs
+
+    def training_step(self, batch, batch_idx):
+        outputs = super().training_step(batch, batch_idx)
+        self.decay_temperature()
+        return outputs
+        
