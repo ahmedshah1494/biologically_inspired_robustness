@@ -12,6 +12,7 @@ from mllib.datasets.dataset_factory import ImageDatasetFactory, SupportedDataset
 
 from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter, GaussianNoiseLayer
 from adversarialML.biologically_inspired_models.src.models import GeneralClassifier, LogitAverageEnsembler
+from adversarialML.biologically_inspired_models.src.fixation_prediction.models import RetinaFilterWithFixationPrediction
 from mllib.param import BaseParameters
 import numpy as np
 
@@ -194,10 +195,36 @@ def set_param(p:BaseParameters, param, value):
                         set_param(x, param, value)
     return p
 
+def get_param(p:BaseParameters, param_name=None, param_type=None, default=None):
+    if (param_name is not None) and hasattr(p, param_name):
+        return getattr(p, param_name)
+    elif isinstance(p, param_type):
+        return p
+    else:
+        p_ = None
+        d = p.asdict(recurse=False)
+        for v in d.values():
+            if isinstance(v, BaseParameters):
+                p_ = get_param(v, param_name, param_type, default)
+                if p_ is not None:
+                    return p
+            elif np.iterable(v):
+                for x in v:
+                    if isinstance(x, BaseParameters):
+                        p_ = get_param(x, param_name, param_type, default)
+                        if p_ is not None:
+                            return p
+    return p_
+
 def setup_for_five_fixation_evaluation(p: BaseParameters):
     ensembler_params = LogitAverageEnsembler.ModelParams(LogitAverageEnsembler, n=5)
     set_param(p, 'logit_ensembler_params', ensembler_params)
-    set_retina_loc_mode(p, 'five_fixations')
+    fpn_params = get_param(p, param_type=RetinaFilterWithFixationPrediction.ModelParams)
+    if fpn_params is not None:
+        set_param(fpn_params, 'num_eval_fixation_points', 5)
+        set_retina_loc_mode(p, 'center')
+    else:
+        set_retina_loc_mode(p, 'five_fixations')
     print(p)
     return p
 
