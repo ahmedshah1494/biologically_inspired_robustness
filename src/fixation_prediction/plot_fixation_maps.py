@@ -6,7 +6,9 @@ import numpy as np
 from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
 from adversarialML.biologically_inspired_models.src.utils import load_pickle, load_json, write_json
 from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter
+from adversarialML.biologically_inspired_models.src.fixation_prediction.models import FixationPredictionNetwork
 from mllib.datasets.dataset_factory import SupportedDatasets, ImageDatasetFactory
+from mllib.datasets.imagenet_filelist_dataset import ImagenetFileListDataset
 from matplotlib import pyplot as plt
 from mllib.param import BaseParameters
 import matplotlib.patches as patches
@@ -59,39 +61,62 @@ for m in model.modules():
     if isinstance(m, AbstractRetinaFilter):
         rblur = m
         rblur.view_scale = None
-        rblur.loc_mode = 'random_in_image'
-        break
+        # rblur.params.loc_mode = 'center'
+        # break
+    if isinstance(m, FixationPredictionNetwork):
+        model = m
 
 dsparams = task.get_dataset_params()
-_, _, test_dataset, _ = ImageDatasetFactory.get_image_dataset(dsparams)
+test_dataset = ImageDatasetFactory.get_image_dataset(dsparams)[2]
 
 nimgs = 5
 nrows = nimgs
-ncols = 4
-for i,e in enumerate(test_dataset):
-    if i >= nimgs:
-        break
+ncols = 5
+if hasattr(test_dataset, 'dataset') and isinstance(test_dataset.dataset, (torchvision.datasets.ImageFolder, ImagenetFileListDataset)):
+    rand_idxs = np.random.permutation(len(test_dataset))
+    test_dataset = torch.utils.data.Subset(test_dataset, rand_idxs)
+    # test_dataset.samples = test_dataset.samples[rand_idxs]
+    # test_dataset.targets = test_dataset.targets[rand_idxs]
+    # test_dataset.imgs = test_dataset.imgs[rand_idxs]
+count = 0
+for e in test_dataset:
     x = e[0].cuda().unsqueeze(0)
     y = e[-1]
-    y /= y.max()        
-
+    if (y == 1).all() or (y == 0).all():
+        continue
+    y /= y.max()
     xp = model.preprocess(x)
     yp = model(x)
+    if hasattr(model, 'standardize_heatmap'):
+        yp = torch.relu(model.standardize_heatmap(yp))
+    if getattr(model_params, 'loss_fn', None) == 'bce':
+        yp = torch.sigmoid(yp)
     if isinstance(yp, list):
         ncols += len(yp)-1
     else:
         yp = [yp]
     if y.dim() == 1:
         y = y.reshape(int(np.sqrt(len(y))), int(np.sqrt(len(y))))
-        yp = [_yp.reshape(*(y.shape)).unsqueeze(0).unsqueeze(0) for _yp in yp]
         y = y.unsqueeze(-1)
-    plt.subplot(nrows, ncols, i*ncols+1)
+    if yp[0].dim() == 1:
+        yp = [_yp.reshape(*(y.shape[:-1])).unsqueeze(0).unsqueeze(0) for _yp in yp]
+    plt.subplot(nrows, ncols, count*ncols+1)
     plt.imshow(convert_image_tensor_to_ndarray(x[0]))
-    plt.subplot(nrows, ncols, i*ncols+2)
+    plt.subplot(nrows, ncols, count*ncols+2)
     plt.imshow(convert_image_tensor_to_ndarray(xp[0]))
-    plt.subplot(nrows, ncols, i*ncols+3)
+    plt.subplot(nrows, ncols, count*ncols+3)
     plt.imshow(y)
+    print(y.shape, y.min(), y.max())
     for k, _yp in enumerate(yp):
-        plt.subplot(nrows, ncols, i*ncols+4+k)
+        plt.subplot(nrows, ncols, count*ncols+4+k)
         plt.imshow(convert_image_tensor_to_ndarray(_yp[0]))
-plt.savefig('fixation_maps.png')
+        print(_yp[0].shape, _yp[0].min(), _yp[0].max())
+        plt.subplot(nrows, ncols, count*ncols+5+k)
+        _yp = torch.nn.functional.interpolate(_yp, size=y.shape[:2])
+        plt.imshow(convert_image_tensor_to_ndarray(_yp[0]))
+    count += 1
+    if count >= nimgs:
+        break
+
+exp_num = args.ckp.split('/')[-3]
+plt.savefig(f'fixation_prediction/{args.task.split(".")[-1]}-{exp_num}_fixation_maps.png')
