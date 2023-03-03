@@ -73,10 +73,10 @@ locs = list(product(col_locs, row_locs))
 # locs = [(111,111)]
 
 ds_params = task.get_dataset_params()
-# ds_params.dataset = SupportedDatasets.ECOSET10_FOLDER
-# ds_params.datafolder = os.path.dirname(os.path.dirname(ds_params.datafolder))
-ds_params.dataset = SupportedDatasets.ECOSET100_FOLDER
-ds_params.datafolder = f'{os.path.dirname(ds_params.datafolder)}/eval_dataset_dir'
+ds_params.dataset = SupportedDatasets.ECOSET10_FOLDER
+ds_params.datafolder = os.path.dirname(os.path.dirname(ds_params.datafolder))
+# ds_params.dataset = SupportedDatasets.ECOSET100_FOLDER
+# ds_params.datafolder = f'{os.path.dirname(ds_params.datafolder)}/eval_dataset_dir'
 ds_params.max_num_test = args.num_test
 print(ds_params)
 _, _, test_dataset, nclasses = ds_params.cls.get_image_dataset(ds_params)
@@ -108,7 +108,8 @@ if not args.plot_examples:
                     y_ = y
 
                 set_param(model.params, 'loc_mode', 'const')
-                set_param(model.params, 'loc', (vf_rad - l[0], vf_rad - l[1]))
+                # set_param(model.params, 'loc', (vf_rad - l[0], vf_rad - l[1]))
+                set_param(model.params, 'loc', (l[0], l[1]))
                 if args.eps > 0:
                     x_ = APGD(model, eps=args.eps)(x_, y_)
                 logits = model(x_).detach().cpu()
