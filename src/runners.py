@@ -120,7 +120,7 @@ class AdversarialAttackBatteryRunner(AdversarialExperimentRunner):
             print(d)
         else:
             def is_exp_complete(i):
-                return os.path.exists(os.path.join(logdir, str(i), 'metrics.json'))
+                return os.path.exists(os.path.join(logdir, str(i), 'metrics.json')) or os.path.exists(os.path.join(logdir, str(i), 'adv_metrics.json'))
             exp_params = self.task.get_experiment_params()
             exp_name = f'-{exp_name}' if len(exp_name) > 0 else exp_name
             task_name = self.task._cls.__name__
