@@ -238,6 +238,10 @@ class FixationPredictionNetwork(AbstractModel):
         freeze_backbone: bool = False
         partially_mask_loss: bool = False
         loss_fn: str = 'bce'
+        llfeat_module_name: str = None
+        llfeat_dim: int = None
+        hlfeat_module_name: str = None
+        hlfeat_dim: int = None
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -281,7 +285,14 @@ class FixationPredictionNetwork(AbstractModel):
                 print('backbone loaded!')
             if self.params.freeze_backbone:
                 backbone.requires_grad_(False)
-            if isinstance(backbone, ResNet):
+            if (self.params.llfeat_module_name and self.params.hlfeat_module_name and 
+                    self.params.llfeat_dim and self.params.hlfeat_dim):
+                if isinstance(backbone, XResNet34):
+                    backbone = backbone.resnet
+                backbone = IntermediateLayerGetter(backbone, {self.params.llfeat_module_name:'low_level_feats', 
+                                                                self.params.hlfeat_module_name:'out'})
+                self.conv = DeepLab3p(backbone, 1, hl_channels=self.params.hlfeat_dim, ll_channels=self.params.llfeat_dim)
+            elif isinstance(backbone, ResNet):
                 backbone = IntermediateLayerGetter(backbone, {'layer1':'low_level_feats', 'layer4':'out'})
                 self.conv = DeepLab3p(backbone, 1)
             elif isinstance(backbone, XResNet34):
