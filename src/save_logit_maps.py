@@ -7,6 +7,7 @@ from adversarialML.biologically_inspired_models.src.runners import load_params_i
 from adversarialML.biologically_inspired_models.src.utils import load_pickle, load_json, write_json
 from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter
 from mllib.datasets.dataset_factory import SupportedDatasets
+from mllib.datasets.imagenet_filelist_dataset import ImagenetFileListDataset
 from matplotlib import pyplot as plt
 from mllib.param import BaseParameters
 import matplotlib.patches as patches
@@ -47,6 +48,7 @@ parser.add_argument('--eps', type=float, default=0.)
 parser.add_argument('--num_test', type=int, default=np.inf)
 parser.add_argument('--N', type=int, default=49)
 parser.add_argument('--image_dir', type=str)
+parser.add_argument('--split', type=str, default='train')
 parser.add_argument('--logit_map_output_dir', type=str)
 parser.add_argument('--overwrite', action='store_true')
 
@@ -78,15 +80,15 @@ transform = torchvision.transforms.Compose([
     torchvision.transforms.CenterCrop(224),
     torchvision.transforms.ToTensor()
 ])
-class mDataset(torchvision.datasets.ImageFolder):
+class mDataset(ImagenetFileListDataset):
     def __getitem__(self, i):
-        fn, _ = self.samples[i]
+        fn = self.samples[i]
         x, y = super().__getitem__(i)
         return fn, x, y
-test_dataset = mDataset(args.image_dir, transform=transform)
+test_dataset = mDataset(args.image_dir, split=args.split, transform=transform)
 nclasses = len(set(test_dataset.targets))
 
-loader = torch.utils.data.DataLoader(test_dataset, batch_size=128, shuffle=False)
+loader = torch.utils.data.DataLoader(test_dataset, batch_size=64, shuffle=False)
 
 correct = 0
 adv_correct = 0
@@ -97,6 +99,7 @@ for i,batch in enumerate(t):
     # if i < 473:
     #     continue
     filenames, x, y = batch
+    filenames = np.array(filenames)
     idx_to_include = []
     if not args.overwrite:
         for i, fn in enumerate(filenames):
@@ -109,11 +112,13 @@ for i,batch in enumerate(t):
 
     # print(filenames)
     # exit()
+    print(x.shape)
     x = x.cuda()
     total += x.shape[0]
     # logit_map = np.zeros((x.shape[0], nclasses, x.shape[2], x.shape[3]))
     loc_logits = []
     loc_correct = []
+    loc_probs = []
     c = np.zeros((x.shape[0],), dtype=bool)
     for l in locs:
         set_param(model.params, 'loc_mode', 'const')
@@ -127,13 +132,16 @@ for i,batch in enumerate(t):
         c |= c_
         loc_logits.append(logits)
         loc_correct.append(c_.astype(int))
+        loc_prob = torch.softmax(logits, 1)[torch.arange(len(y)), y].numpy()
+        loc_probs.append(loc_prob)
         # logit_map[..., l[0], l[1]] = logits.numpy()
         print(l, x.shape, y.shape, c.astype(int).sum())
     loc_logits = np.stack(loc_logits, 1)
     loc_correct = np.stack(loc_correct, 1)
+    loc_probs = np.stack(loc_probs, 1)
 
     print('saving logit maps...')
-    for fn, llogits, lcor, l in zip(filenames, loc_logits, loc_correct, y):
+    for fn, llogits, lcor, lprob, l in zip(filenames, loc_logits, loc_correct, loc_probs, y):
         l = int(l)
         [label, fn] = fn.split('/')[-2:]
         odir = f'{args.logit_map_output_dir}/{label}/'
@@ -141,7 +149,7 @@ for i,batch in enumerate(t):
             os.makedirs(odir)
         fn = fn.split('.')[0]
         # cmap = (np.argmax(llogits, 0) == l).astype(int)
-        np.savez(f'{odir}/{fn}.npz', fixation_logits=llogits, fixation_correct=lcor, label=l, locs=locs)
+        np.savez(f'{odir}/{fn}.npz', fixation_logits=llogits, fixation_correct=lcor, fixation_probs=lprob, label=l, locs=locs)
     correct += c.astype(int).sum()
     accuracy = correct/total
     # imgs.append(x.cpu().detach().numpy())
