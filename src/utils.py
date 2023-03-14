@@ -234,3 +234,13 @@ def recursive_dict_update(dsrc, dtgt):
                 dtgt[ksrc] = vsrc
         else:
             dtgt[ksrc] = vsrc
+
+def variable_length_sequence_collate_fn(data):
+    wavs, txts = zip(*data)
+    wavs = [w.transpose(0,1) for w in wavs]
+    txts = [torch.LongTensor(t) for t in txts]
+    input_lengths = torch.LongTensor([len(w) for w in wavs])
+    target_lengths = torch.LongTensor([len(t) for t in txts])
+    wavs = torch.nn.utils.rnn.pad_sequence(wavs, batch_first=True, padding_value=0)
+    txts = torch.nn.utils.rnn.pad_sequence(txts, batch_first=True, padding_value=2)
+    return wavs, txts, input_lengths, target_lengths
