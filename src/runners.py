@@ -6,7 +6,7 @@ from mllib.runners.base_runners import BaseRunner
 from mllib.runners.configs import BaseExperimentConfig
 import torch
 from mllib.datasets.dataset_factory import SupportedDatasets
-from adversarialML.biologically_inspired_models.src.utils import write_pickle
+from adversarialML.biologically_inspired_models.src.utils import write_pickle, variable_length_sequence_collate_fn
 import webdataset as wds
 @define(slots=False)
 class TransferLearningExperimentConfig(BaseExperimentConfig):
@@ -66,6 +66,10 @@ class AdversarialExperimentRunner(BaseRunner):
         p = self.task.get_experiment_params()
         
         ds = self.task.get_dataset_params().dataset
+        if ds == SupportedDatasets.LIBRISPEECH:
+            collate_fn = variable_length_sequence_collate_fn
+        else:
+            collate_fn = torch.utils.data.default_collate
         if isinstance(train_dataset, wds.WebDataset):
             num_workers = 16
 
@@ -77,9 +81,9 @@ class AdversarialExperimentRunner(BaseRunner):
             val_loader = wds.WebLoader(val_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(val_dataset) // p.batch_size)
             test_loader = wds.WebLoader(test_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(test_dataset) // p.batch_size)
         else:
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=p.batch_size, shuffle=True, num_workers=10, pin_memory=True, persistent_workers=True)
-            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True)
-            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=p.batch_size, shuffle=True, num_workers=10, pin_memory=True, persistent_workers=True, collate_fn=collate_fn)
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True, collate_fn=collate_fn)
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True, collate_fn=collate_fn)
 
         return train_loader, val_loader, test_loader
         
