@@ -611,7 +611,7 @@ class ScanningConsistentActivationLayer(AbstractModel, CommonModelMixin, Consist
         self.use_forward = use_forward
 
         self.actual_input_size = self.input_size
-        self.input_size = self.input_size[0] * (self.kernel_size ** 2)
+        self.input_size = self.input_size[0] * ((self.kernel_size ** 2) if isinstance(self.kernel_size, int) else np.prod(self.kernel_size))
         self.output_spatial_dims = _compute_conv_output_shape(self.actual_input_size[1:], kernel_size, stride, padding, 1)
     
     def _make_name(self):
