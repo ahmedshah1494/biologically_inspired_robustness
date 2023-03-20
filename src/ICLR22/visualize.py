@@ -332,6 +332,34 @@ def plot_ecoset100_pgdinf_results():
     print(clean_results_df)
     clean_results_df.to_csv(os.path.join(outdir, 'clean_accuracy.csv'))
 
+def plot_ecoset100_pgdinf_randaug_results():
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100CyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('R-Blur (RandAug)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('R-Blur (no RandAug)', (f'{log_root}/ecoset100-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRXResNet2x18', ['5FixationAPGD'])),
+
+    ])
+
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    print(df)
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset100')
+    sns.set_style("whitegrid")
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] > 0.])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
+    # plt.legend([],[], frameon=False)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_randaug.png'))
+    plt.close()
+
+    clean_results_df = df[df['Perturbation Distance ‖ϵ‖∞'] == 0]
+    clean_results_df = pd.pivot_table(clean_results_df, values='Accuracy', index='Method')
+    print(clean_results_df)
+    clean_results_df.to_csv(os.path.join(outdir, 'clean_accuracy.csv'))
+
 def plot_ecoset_pgdinf_results():
     plot_config = OrderedDict([
         ('ResNet', (f'{log_root}/ecoset-0.0/EcosetCyclicLRRandAugmentXResNet2x18', ['APGD'])),
@@ -354,6 +382,36 @@ def plot_ecoset_pgdinf_results():
     plt.legend([],[], frameon=False)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf.png'))
+    plt.close()
+
+    clean_results_df = df[df['Perturbation Distance ‖ϵ‖∞'] == 0]
+    clean_results_df = pd.pivot_table(clean_results_df, values='Accuracy', index='Method')
+    print(clean_results_df)
+    clean_results_df.to_csv(os.path.join(outdir, 'clean_accuracy.csv'))
+
+def plot_ecoset_pgdinf_results_with_affine():
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/ecoset-0.0/EcosetCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('- w/ 5 Affine', (f'{log_root}/ecoset-0.0/EcosetCyclicLRRandAugmentXResNet2x18', ['5RandAug'])),
+        ('R-Warp', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('R-Blur', (f'{log_root}/ecoset-0.0/EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
+        # ('G-Noise', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('AT', (f'{log_root}/ecoset-0.008/EcosetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+    ])
+
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset')
+    print(df)
+    sns.set_style("whitegrid")
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] >= 0.002])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
+    plt.legend(frameon=False, ncol=2)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_with_affine.png'))
     plt.close()
 
     clean_results_df = df[df['Perturbation Distance ‖ϵ‖∞'] == 0]
@@ -433,6 +491,125 @@ def plot_ecoset_pgdl2_results():
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_l2.png'))
     plt.close()
+
+def plot_imagenet_pgdinf_results():
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('R-Warp', (f'{log_root}/imagenet_folder-0.0/ImagenetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('R-Blur', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
+        # ('G-Noise', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+        ('AT', (f'{log_root}/imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+    ])
+
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+    print(df)
+    sns.set_style("whitegrid")
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
+    # plt.legend([],[], frameon=False)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_linf.png'))
+    plt.close()
+
+def plot_imagenet_pgdl2_results():
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+        ('R-Warp', (f'{log_root}/imagenet_folder-0.0/ImagenetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
+        ('R-Blur', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
+        # ('G-Noise', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+        ('AT', (f'{log_root}/imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+    ])
+
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+    print(df)
+    sns.set_style("whitegrid")
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, data=df[(df['Perturbation Distance ‖ϵ‖2'] != 1)])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*10 for i in range(11)], [i*10 for i in range(11)])
+    plt.legend([],[], frameon=False)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_l2.png'))
+    plt.close()
+
+def plot_imagenet_pgd_results():
+    plt.figure(figsize=(30,5))
+    plt.subplot(1, 4, 1)
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('R-Warp', (f'{log_root}/imagenet_folder-0.0/ImagenetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('R-Blur', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGD'])),
+        # ('G-Noise', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+        ('AT', (f'{log_root}/imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+    ])
+
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+    print(df)
+    sns.set_style("whitegrid")
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*20 for i in range(5)], [i*20 for i in range(5)])
+    plt.legend([],[], frameon=False)
+    plt.tight_layout()
+
+    plt.subplot(1, 4, 2)
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+        ('R-Warp', (f'{log_root}/imagenet_folder-0.0/ImagenetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
+        ('R-Blur', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationAPGDL2'])),
+        # ('G-Noise', (f'{log_root}/ecoset-0.0/EcosetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+        ('AT', (f'{log_root}/imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGDL2'])),
+    ])
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+    print(df)
+    sns.set_style("whitegrid")
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖2', y='Accuracy', hue='Method', hue_order=plot_config, data=df[(df['Perturbation Distance ‖ϵ‖2'] != 1)])
+    for container in ax.containers:
+        ax.bar_label(container, fmt='%d')
+    plt.ylim((0,1))
+    plt.yticks([i*20 for i in range(5)], [i*20 for i in range(5)])
+    # plt.legend([],[], frameon=False)
+
+    plt.subplot(1, 4, 3)
+    plt.title('σ=0.125')
+    plot_config = OrderedDict([
+        # ('R-Warp-CFI', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['Centered-0.125', 'Centered-0.25'])),
+        ('R-Blur-CFI (σ=0.125)', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['Centered-0.125', '0.25'])),
+        ('G-Noise (σ=0.125)', (f'{log_root}/imagenet_folder-0.0/ImagenetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['0.125', '0.25'])),
+    ])
+    outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+    logdicts = get_logdict(plot_config)
+    df = create_rs_dataframe(logdicts, plot_config, 200)
+    with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
+        sns.set_style("whitegrid")
+        # plot=sns.relplot(x='radius', y='accuracy', hue='model_name', row='σ', hue_order=plot_config.keys(), data=df, kind='line')
+        sns.lineplot(x='radius', y='accuracy', hue='model_name', hue_order=plot_config.keys(), data=df[df['σ'] == 0.125])
+
+    plt.subplot(1, 4, 4)
+    plt.title('σ=0.25')
+    with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
+        sns.set_style("whitegrid")
+        # plot=sns.relplot(x='radius', y='accuracy', hue='model_name', row='σ', hue_order=plot_config.keys(), data=df, kind='line')
+        sns.lineplot(x='radius', y='accuracy', hue='model_name', hue_order=plot_config.keys(), data=df[df['σ'] == 0.25])
+    plt.legend([],[], frameon=False)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'pgd+rs.png'))
+    plt.close()
+
 
 
 def plot_cifar10_pgdinf_training_ablation_results():
@@ -634,6 +811,7 @@ def plot_ecoset100_certified_robustness_results():
         ('R-Blur-5FI (σ=0.0)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100RetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5Fixation-0.125', '5Fixation-0.25'])),
         ('R-Blur-CFI (σ=0.125)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['Centered-0.125', 'Centered-0.25'])),
         ('G-Noise (σ=0.125)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['0.125', '0.25'])),
+        ('G-Noise (σ=0.25)', (f'{log_root}/ecoset100-0.0/Ecoset100GaussianNoiseS2500CyclicLRRandAugmentXResNet2x18', ['Centered-0.25'])),
     ])
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset100')
     logdicts = get_logdict(plot_config)
@@ -663,14 +841,32 @@ def plot_ecoset_certified_robustness_results():
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'rs_certified_acc_line.png'))
 
+def plot_imagenet_certified_robustness_results():
+    plot_config = OrderedDict([
+        # ('R-Warp-CFI', (f'{log_root}/ecoset-0.0/EcosetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['Centered-0.125', 'Centered-0.25'])),
+        ('R-Blur-CFI (σ=0.125)', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['Centered-0.125', '0.25'])),
+        ('G-Noise (σ=0.125)', (f'{log_root}/imagenet_folder-0.0/ImagenetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['0.125', '0.25'])),
+    ])
+    outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+    logdicts = get_logdict(plot_config)
+    df = create_rs_dataframe(logdicts, plot_config, 200)
+    plt.figure(figsize=(5,8))
+    with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
+        sns.set_style("whitegrid")
+        plot=sns.relplot(x='radius', y='accuracy', hue='model_name', row='σ', hue_order=plot_config.keys(), data=df, kind='line')
+        sns.move_legend(plot, "upper center", bbox_to_anchor=(0.78, 0.95))
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'rs_certified_acc_line.png'))
+
 
 def plot_ecoset10_pgdinf_atrblur_results():
     plot_config = OrderedDict([
         ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
         ('AT', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
         # ('AT+R-Blur (σ=0.25)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainNoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
-        ('AT+R-Blur (1-step)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
-        ('AT+R-Blur (7-steps)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrain7StepsRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('R-Blur + AT (1-step)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrainRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        ('R-Blur + AT (7-steps)', (f'{log_root}/ecoset10-0.008/Ecoset10AdvTrain7StepsRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
+        # ('R-Blur + AT (Cls Only)', (f'{log_root}/ecoset10-0.008/Ecoset10ClsAdvTrainNoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationAPGD'])),
     ])
 
     logdicts = get_logdict(plot_config)
@@ -678,9 +874,14 @@ def plot_ecoset10_pgdinf_atrblur_results():
     print(df)
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
     sns.set_style("whitegrid")
-    sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
-    plt.legend([],[], frameon=False)
-    plt.tight_layout()
+    ax = sns.catplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df, kind='bar')
+    # for container in ax.containers:
+    #     ax.bar_label(container, fmt='%d')
+    # plt.legend([],[], frameon=False)
+    # plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=2)
+    # plt.ylim((0,1))
+    # plt.yticks([i*10 for i in range(11)])
+    # plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_atrblur.png'))
     plt.close()
 
@@ -956,6 +1157,8 @@ def plot_ecoset10_pgdinf_beta_results():
     # plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_beta.png'), bbox_inches='tight')
     plt.close()
+
+
 
 def plot_cifar10_cc_results():
     plot_config = OrderedDict([
@@ -1248,7 +1451,12 @@ def plot_all_ecoset_AT_results():
 # plot_ecoset100_pgdinf_results()
 # plot_ecoset_pgdinf_results()
 # plot_ecoset100_pgdl2_results()
+plot_ecoset100_pgdinf_randaug_results()
 # plot_ecoset_pgdl2_results()
+# plot_ecoset_pgdinf_results_with_affine()
+# plot_imagenet_pgdinf_results()
+# plot_imagenet_pgdl2_results()
+# plot_imagenet_pgd_results()
 
 # plot_cifar10_pgdinf_training_ablation_results()
 # plot_cifar10_pgdl2_training_ablation_results()
@@ -1261,6 +1469,7 @@ def plot_all_ecoset_AT_results():
 # plot_ecoset10_certified_robustness_results()
 # plot_ecoset100_certified_robustness_results()
 # plot_ecoset_certified_robustness_results()
+# plot_imagenet_certified_robustness_results()
 
 # plot_ecoset10_pgdinf_atrblur_results()
 # plot_ecoset10_pgdl2_atrblur_results()
@@ -1282,7 +1491,7 @@ def plot_all_ecoset_AT_results():
 # plot_ecoset100_cc_results()
 # plot_ecoset_cc_results()
 
-plot_all_ecoset_many_fixation_results()
+# plot_all_ecoset_many_fixation_results()
 # plot_all_ecoset_five_fixation_results()
 
 # plot_all_ecoset_AT_results()
