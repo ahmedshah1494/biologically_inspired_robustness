@@ -238,7 +238,7 @@ class Ecoset10AdvTrain7StepsRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNe
             logdir=LOGDIR, batch_size=32 # run with 4 GPUs
         )
 
-class Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18(AbstractTask):
+class Ecoset100AdvTrainNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
