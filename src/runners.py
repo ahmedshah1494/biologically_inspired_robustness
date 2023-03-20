@@ -77,16 +77,16 @@ class AdversarialExperimentRunner(BaseRunner):
             val_loader = wds.WebLoader(val_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(val_dataset) // p.batch_size)
             test_loader = wds.WebLoader(test_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(test_dataset) // p.batch_size)
         else:
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=p.batch_size, shuffle=True, num_workers=10, pin_memory=True, persistent_workers=True)
-            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True)
-            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True)
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=p.batch_size, shuffle=True, num_workers=10, pin_memory=True, persistent_workers=True, drop_last=True)
+            val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True, drop_last=True)
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True, drop_last=True)
 
         return train_loader, val_loader, test_loader
-        
-    def get_experiment_dir(self, logdir, exp_name):
-        def is_exp_complete(i):
-            return os.path.exists(os.path.join(logdir, str(i), 'metrics.json'))
-        exp_params = self.task.get_experiment_params()
+
+    def _is_exp_complete(self, logdir, i):
+        return os.path.exists(os.path.join(logdir, str(i), 'metrics.json'))
+
+    def _get_expdir(self, logdir, exp_name):
         exp_name = f'-{exp_name}' if len(exp_name) > 0 else exp_name
         task_name = type(self.task).__name__
         dataset = self.task.get_dataset_params().dataset.name.lower()
@@ -95,16 +95,20 @@ class AdversarialExperimentRunner(BaseRunner):
             eps = 0.0
         else:
             eps = tr_att_p.eps
-        logdir = os.path.join(exp_params.logdir, f'{dataset}-{eps}', task_name+exp_name)
-        exp_num = 0
-        while is_exp_complete(exp_num):
-            exp_num += 1
-        logdir = os.path.join(logdir, str(exp_num))
-        if os.path.exists(logdir):
-            shutil.rmtree(logdir)
-        os.makedirs(logdir)
-        print(f'writing logs to {logdir}')
-        return logdir
+        expdir = os.path.join(logdir, f'{dataset}-{eps}', task_name+exp_name)
+        return expdir
+        
+    # def get_experiment_dir(self, logdir, exp_name):
+    #     logdir = self._get_expdir(logdir, exp_name)
+    #     exp_num = 0
+    #     while self._is_exp_complete(exp_num):
+    #         exp_num += 1
+    #     logdir = os.path.join(logdir, str(exp_num))
+    #     if os.path.exists(logdir):
+    #         shutil.rmtree(logdir)
+    #     os.makedirs(logdir)
+    #     print(f'writing logs to {logdir}')
+    #     return logdir
 
 class AdversarialAttackBatteryRunner(AdversarialExperimentRunner):
     def __init__(self, task, num_trainings: int = 1, ckp_pth: str = None, load_model_from_ckp: bool = False, output_to_ckp_dir=True, wrap_trainer_with_lightning: bool = False, lightning_kwargs=...) -> None:
