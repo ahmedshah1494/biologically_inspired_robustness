@@ -183,12 +183,13 @@ class GaussianNoiseLayer(AbstractModel):
         return f"GaussianNoiseLayer(std={self.std})"
     
     def forward(self, img):
-        if self.training:
+        if self.training or self.params.add_noise_during_inference:
             d = torch.empty_like(img).normal_(0, self.std)
         else:
             if self.params.add_deterministic_noise_during_inference:
-                b, c, h ,w = img.shape
-                d = self.noise_patch[:c, :h, :w].unsqueeze(0)
+                # b, c, h ,w = img.shape
+                # d = self.noise_patch[:c, :h, :w].unsqueeze(0)
+                d = torch.empty_like(img).normal_(0, self.std, generator=torch.Generator(device=img.device).manual_seed(51972691))
             else:
                 d = 0
         return img + d
@@ -651,3 +652,63 @@ class RetinaWarp(AbstractRetinaFilter):
         # plt.savefig('input.png')
         # plt.close()
         return warped
+
+class VOneBlock(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        sf_corr: float = 0.75
+        sf_max: int = 9
+        sf_min: int = 0
+        rand_param: bool = False
+        gabor_seed: int = 0
+        simple_channels: int = 256
+        complex_channels: int = 256
+        noise_mode: str = 'neuronal'
+        noise_scale: float = 0.35
+        noise_level: float = 0.07
+        k_exc: int = 25
+        image_size: int = 224
+        visual_degrees: int = 8
+        ksize: int = 25
+        stride: int = 4
+        model_arch: None = None
+        add_noise_during_inference: bool = False
+        add_deterministic_noise_during_inference: bool = False
+
+    
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.params = params
+        kwargs_to_exclude = set(['cls', 'add_noise_during_inference', 'add_deterministic_noise_during_inference'])
+        kwargs = params.asdict(filter=lambda a,v: a.name not in kwargs_to_exclude)
+        print(kwargs)
+        from adversarialML.biologically_inspired_models.vonenet.vonenet.vonenet import VOneNet
+        voneblock = VOneNet(**kwargs)
+        bottleneck = nn.Conv2d(params.simple_channels+params.complex_channels, 64, kernel_size=1, stride=1, bias=False)
+        self.voneblock = nn.Sequential(
+            voneblock,
+            bottleneck
+        )
+
+    
+    def forward(self, x):
+        if (not self.training) and (not self.params.add_noise_during_inference):
+                if self.params.add_deterministic_noise_during_inference:
+                    v1block = self.voneblock[0]
+                    noise_sz = (x.shape[0], v1block.out_channels, int(v1block.input_size/v1block.stride),
+                                 int(v1block.input_size/v1block.stride))
+                    self.voneblock[0].fixed_noise = torch.empty(*noise_sz,).normal_(generator=torch.Generator().manual_seed(51972691)).to(x.device)
+                else:
+                    self.voneblock[0].noise_mode = None
+        return self.voneblock(x)
+
+    def compute_loss(self, x, y, return_logits=True):
+        out = self.forward(x)
+        logits = out
+        loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+        

@@ -319,8 +319,8 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         update_and_save_logs(self.logdir, self.metrics_filename, load_json, write_json, self.save_training_logs, 
                                 train_metrics['train_accuracy'], test_outputs['test_acc'])
         save_pred_and_label_csv(self.per_attack_logdir, 'label_and_preds.csv', test_outputs['preds'], test_outputs['labels'])
-        update_and_save_logs(self.logdir, self.data_and_pred_filename, load_pickle, write_pickle, self.save_data_and_preds,
-                                test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
+        # update_and_save_logs(self.logdir, self.data_and_pred_filename, load_pickle, write_pickle, self.save_data_and_preds,
+        #                         test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
         # self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
         # self.save_data_and_preds(test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
         self.save_source_dir()        
@@ -412,6 +412,8 @@ class RandomizedSmoothingParams:
     N: int =  100_000
     alpha: float = 0.001
     mode: Literal['certify', 'predict'] = 'certify'
+    start_idx: int = 0
+    end_idx: int = np.inf
 
 class RandomizedSmoothingEvaluationTrainer(_Trainer):
     @define(slots=False)    
@@ -453,19 +455,23 @@ class RandomizedSmoothingEvaluationTrainer(_Trainer):
         for smoothed_model in self.smoothed_models:
             _preds = []
             _radii = []
+            num_correct = 0
+            print(f'start_idx:{self.params.randomized_smoothing_params.start_idx}\t end_idx:{self.params.randomized_smoothing_params.end_idx}')
             for i,(y_,x_) in tqdm(enumerate(zip(y, x))):
-                if (i < 0) or (i > 100):
+                if (i < self.params.randomized_smoothing_params.start_idx) or (i > self.params.randomized_smoothing_params.end_idx):
                     print(f'skipping {i}')
                     continue
                 p,r = self._single_sample_step(smoothed_model, x_)
                 self.save_single_sample_results(get_hash(x_[0]), f'{self.params.exp_name}{smoothed_model.sigma}', y_, p, r)
                 _preds.append(p)
                 _radii.append(r)
+                num_correct += int(y_ == p)
+                print(i, num_correct/(i+1))
             # _preds = torch.stack(_preds)
             # _radii = torch.stack(_radii)
             preds[f'{self.params.exp_name}{smoothed_model.sigma}'] = _preds#.detach().cpu().numpy().tolist()
             radii[f'{self.params.exp_name}{smoothed_model.sigma}'] = _radii#.detach().cpu().numpy().tolist()
-            acc[f'{self.params.exp_name}{smoothed_model.sigma}'] = (np.array(_preds) == y).astype(float).mean()
+            acc[f'{self.params.exp_name}{smoothed_model.sigma}'] = num_correct / (self.params.randomized_smoothing_params.end_idx - self.params.randomized_smoothing_params.start_idx)
         metrics = {f'test_acc_{k}':v for k,v in acc.items()}
 
         return {'preds': preds, 'radii': radii, 'labels':y.tolist(), 'inputs':x.detach().cpu().numpy()}, metrics
