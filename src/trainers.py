@@ -296,12 +296,17 @@ def update_and_save_logs(logdir, outfilename, load_fn, write_fn, save_fn, *save_
     else:
         save_fn(*save_fn_args, **save_fn_kwargs)
 
-def save_pred_and_label_csv(logdir, outfile, preds, labels):
+def save_pred_and_label_csv(logdir, outfile, preds, labels, logits):
     for atkname in preds.keys():
+        sorted_logits = np.argsort(logits[atkname], 1)
+        label_ranks = []
+        for sl, l in zip(sorted_logits, labels):
+            r = sorted_logits.shape[1] - sl.tolist().index(l) - 1
+            label_ranks.append(r)
         with open(os.path.join(logdir, f'{atkname}_{outfile}'), 'w') as f:
-            f.write('L,P\n')
-            for p,l in zip(preds[atkname], labels):
-                f.write(f'{l},{p}\n')
+            f.write('L,P1,P2,P3,P4,P5,R\n')
+            for p,l,r,sl in zip(preds[atkname], labels, label_ranks, sorted_logits):
+                f.write(f'{l},{p},{sl[-2]},{sl[-3]},{sl[-4]},{sl[-5]},{r}\n')
 
 class MultiAttackEvaluationTrainer(AdversarialTrainer):
     def __init__(self, params, *args, **kwargs):
@@ -318,7 +323,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
     def save_logs_after_test(self, train_metrics, test_outputs):
         update_and_save_logs(self.logdir, self.metrics_filename, load_json, write_json, self.save_training_logs, 
                                 train_metrics['train_accuracy'], test_outputs['test_acc'])
-        save_pred_and_label_csv(self.per_attack_logdir, 'label_and_preds.csv', test_outputs['preds'], test_outputs['labels'])
+        save_pred_and_label_csv(self.per_attack_logdir, 'label_and_preds.csv', test_outputs['preds'], test_outputs['labels'], test_outputs['logits'])
         # update_and_save_logs(self.logdir, self.data_and_pred_filename, load_pickle, write_pickle, self.save_data_and_preds,
         #                         test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
         # self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
