@@ -25,7 +25,7 @@ from einops import rearrange
 
 import pytorch_lightning as pl
 
-from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper, FoolboxCWL2AttackWrapper
+from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper, FoolboxCWL2AttackWrapper, AutoAttackkWrapper
 from mllib.adversarial.randomized_smoothing.core import Smooth
 from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin
 from adversarialML.biologically_inspired_models.src.pruning import PruningMixin
@@ -302,12 +302,17 @@ def update_and_save_logs(logdir, outfilename, load_fn, write_fn, save_fn, *save_
     else:
         save_fn(*save_fn_args, **save_fn_kwargs)
 
-def save_pred_and_label_csv(logdir, outfile, preds, labels):
+def save_pred_and_label_csv(logdir, outfile, preds, labels, logits):
     for atkname in preds.keys():
+        sorted_logits = np.argsort(logits[atkname], 1)
+        label_ranks = []
+        for sl, l in zip(sorted_logits, labels):
+            r = sorted_logits.shape[1] - sl.tolist().index(l) - 1
+            label_ranks.append(r)
         with open(os.path.join(logdir, f'{atkname}_{outfile}'), 'w') as f:
-            f.write('L,P\n')
-            for p,l in zip(preds[atkname], labels):
-                f.write(f'{l},{p}\n')
+            f.write('L,P1,P2,P3,P4,P5,R\n')
+            for p,l,r,sl in zip(preds[atkname], labels, label_ranks, sorted_logits):
+                f.write(f'{l},{p},{sl[-2]},{sl[-3]},{sl[-4]},{sl[-5]},{r}\n')
 
 class MultiAttackEvaluationTrainer(AdversarialTrainer):
     def __init__(self, params, *args, **kwargs):
@@ -324,9 +329,9 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
     def save_logs_after_test(self, train_metrics, test_outputs):
         update_and_save_logs(self.logdir, self.metrics_filename, load_json, write_json, self.save_training_logs, 
                                 train_metrics['train_accuracy'], test_outputs['test_acc'])
-        save_pred_and_label_csv(self.per_attack_logdir, 'label_and_preds.csv', test_outputs['preds'], test_outputs['labels'])
-        update_and_save_logs(self.logdir, self.data_and_pred_filename, load_pickle, write_pickle, self.save_data_and_preds,
-                                test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
+        save_pred_and_label_csv(self.per_attack_logdir, 'label_and_preds.csv', test_outputs['preds'], test_outputs['labels'], test_outputs['logits'])
+        # update_and_save_logs(self.logdir, self.data_and_pred_filename, load_pickle, write_pickle, self.save_data_and_preds,
+        #                         test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
         # self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
         # self.save_data_and_preds(test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
         self.save_source_dir()        
@@ -367,7 +372,10 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
                 eps = atk.attack.confidence
             elif isinstance(atk, FoolboxAttackWrapper):
                 eps = atk.run_kwargs.get('epsilons', [float('inf')])[0]
-            elif isinstance(atk, torchattacks.attack.Attack):
+            elif isinstance(atk, AutoAttackkWrapper):
+                eps = atk.attack.eps
+            # elif isinstance(atk, torchattacks.attack.Attack):
+            elif hasattr(atk, 'eps'):
                 eps = atk.eps
             else:
                 raise NotImplementedError(f'{type(atk)} is not supported')
@@ -447,6 +455,8 @@ class RandomizedSmoothingParams:
     N: int =  100_000
     alpha: float = 0.001
     mode: Literal['certify', 'predict'] = 'certify'
+    start_idx: int = 0
+    end_idx: int = np.inf
 
 class RandomizedSmoothingEvaluationTrainer(_Trainer):
     @define(slots=False)    
@@ -488,19 +498,23 @@ class RandomizedSmoothingEvaluationTrainer(_Trainer):
         for smoothed_model in self.smoothed_models:
             _preds = []
             _radii = []
+            num_correct = 0
+            print(f'start_idx:{self.params.randomized_smoothing_params.start_idx}\t end_idx:{self.params.randomized_smoothing_params.end_idx}')
             for i,(y_,x_) in tqdm(enumerate(zip(y, x))):
-                if (i < 0) or (i > 100):
+                if (i < self.params.randomized_smoothing_params.start_idx) or (i > self.params.randomized_smoothing_params.end_idx):
                     print(f'skipping {i}')
                     continue
                 p,r = self._single_sample_step(smoothed_model, x_)
                 self.save_single_sample_results(get_hash(x_[0]), f'{self.params.exp_name}{smoothed_model.sigma}', y_, p, r)
                 _preds.append(p)
                 _radii.append(r)
+                num_correct += int(y_ == p)
+                print(i, num_correct/(i+1))
             # _preds = torch.stack(_preds)
             # _radii = torch.stack(_radii)
             preds[f'{self.params.exp_name}{smoothed_model.sigma}'] = _preds#.detach().cpu().numpy().tolist()
             radii[f'{self.params.exp_name}{smoothed_model.sigma}'] = _radii#.detach().cpu().numpy().tolist()
-            acc[f'{self.params.exp_name}{smoothed_model.sigma}'] = (np.array(_preds) == y).astype(float).mean()
+            acc[f'{self.params.exp_name}{smoothed_model.sigma}'] = num_correct / (self.params.randomized_smoothing_params.end_idx - self.params.randomized_smoothing_params.start_idx)
         metrics = {f'test_acc_{k}':v for k,v in acc.items()}
 
         return {'preds': preds, 'radii': radii, 'labels':y.tolist(), 'inputs':x.detach().cpu().numpy()}, metrics

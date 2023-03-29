@@ -1,5 +1,5 @@
 import time
-from typing import Callable, List, Type, Union
+from typing import Callable, List, Tuple, Type, Union
 import warnings
 from attrs import define, field
 from mllib.models.base_models import AbstractModel
@@ -20,7 +20,6 @@ from fastai.layers import ResBlock
 from adversarialML.biologically_inspired_models.src.cornet_s import CORnet_S
 
 from adversarialML.biologically_inspired_models.src.wide_resnet import Wide_ResNet
-from adversarialML.biologically_inspired_models.src.FoveatedTextureTransform.model_arch import vgg11_tex_fov
 from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
 from matplotlib import pyplot as plt
 
@@ -1230,12 +1229,15 @@ class XResNet34(AbstractModel):
     class ModelParams(BaseParameters):
         common_params: CommonModelParams = field(factory=CommonModelParams)
         normalization_layer_params: BaseParameters = None
+        preprocessing_layer_params: BaseParameters = None
+        logit_ensembler_params: BaseParameters = None
         setup_feature_extraction: bool = False
         setup_classification: bool = True
         num_classes: int = None
         kernel_size: int = 3
         widen_factor: int = 1.
         widen_stem: bool = False
+        stem_sizes: Tuple[int,int,int] = (32,32,64)
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -1248,7 +1250,7 @@ class XResNet34(AbstractModel):
                                 n_out=self.params.common_params.num_units,
                                 act_cls=self.params.common_params.activation,
                                 widen=self.params.widen_factor,
-                                stem_szs=(32,32,64) if not self.params.widen_stem else (self.params.widen_factor*32,self.params.widen_factor*32,64),
+                                stem_szs= self.params.stem_sizes if not self.params.widen_stem else (self.params.widen_factor*self.params.stem_sizes[0],self.params.widen_factor*self.params.stem_sizes[1],self.params.stem_sizes[2]),
                                 ks=self.params.kernel_size
                             )
         resnet[-1] = nn.Identity()
@@ -1259,18 +1261,29 @@ class XResNet34(AbstractModel):
             self.normalization_layer = self.params.normalization_layer_params.cls(self.params.normalization_layer_params)
         else:
             self.normalization_layer = nn.Identity()
+        if self.params.preprocessing_layer_params is not None:
+            self.preprocessing_layer = self.params.preprocessing_layer_params.cls(self.params.preprocessing_layer_params)
+        else:
+            self.preprocessing_layer = nn.Identity()
         self.resnet = self._make_resnet()
         if self.params.setup_classification:
             x = self.resnet(torch.rand(1, *(self.params.common_params.input_size)))
             self.classifier = nn.Linear(x.shape[1], self.params.num_classes)
+        if self.params.logit_ensembler_params is not None:
+            self.logit_ensembler = self.params.logit_ensembler_params.cls(self.params.logit_ensembler_params)
+        else:
+            self.logit_ensembler = nn.Identity()
 
     def _get_feats(self, x, **kwargs):
         x = self.normalization_layer(x)
+        x = self.preprocessing_layer(x)
         feat = self.resnet(x)
         return feat
     
     def _run_classifier(self, x):
-        return self.classifier(x)
+        logits = self.classifier(x)
+        logits = self.logit_ensembler(logits)
+        return logits
     
     def forward(self, x, **kwargs):
         x = self._get_feats(x)
@@ -1298,8 +1311,8 @@ class XResNet18(XResNet34):
                                 n_out=self.params.common_params.num_units,
                                 act_cls=self.params.common_params.activation,
                                 widen=self.params.widen_factor,
-                                stem_szs=(32,32,64) if not self.params.widen_stem else (self.params.widen_factor*32,self.params.widen_factor*32,64),
-                                ks=self.params.kernel_size
+                                stem_szs= self.params.stem_sizes if not self.params.widen_stem else (self.params.widen_factor*self.params.stem_sizes[0],self.params.widen_factor*self.params.stem_sizes[1],self.params.stem_sizes[2]),
+                                ks=self.params.kernel_size,
                             )
         resnet[-1] = nn.Identity()
         return resnet
@@ -1311,7 +1324,7 @@ class XResNet50(XResNet34):
                                 n_out=self.params.common_params.num_units,
                                 act_cls=self.params.common_params.activation,
                                 widen=self.params.widen_factor,
-                                stem_szs=(32,32,64) if not self.params.widen_stem else (self.params.widen_factor*32,self.params.widen_factor*32,64),
+                                stem_szs= self.params.stem_sizes if not self.params.widen_stem else (self.params.widen_factor*self.params.stem_sizes[0],self.params.widen_factor*self.params.stem_sizes[1],self.params.stem_sizes[2]),
                                 ks=self.params.kernel_size
                             )
         resnet[-1] = nn.Identity()
@@ -1364,6 +1377,7 @@ class LogitAverageEnsembler(AbstractModel):
         if (bn < self.params.n) or (bn % self.params.n != 0):
             w = f'Expected the size of x at dim 0 to be a non-zero multiple of {self.params.n} but got {bn}. Returning x as is.'
             warnings.warn(w)
+            return x
         else:
             x = rearrange(x, '(b n) c -> b n c', n=self.params.n)
         if self.params.reduction == 'mean':
@@ -1394,6 +1408,7 @@ class FovTexVGG(AbstractModel):
         self._make_network()
 
     def _make_network(self):
+        from adversarialML.biologically_inspired_models.src.FoveatedTextureTransform.model_arch import vgg11_tex_fov
         self.vgg = vgg11_tex_fov(self.params.scale, self.params.common_params.input_size[1], 
                                     self.params.num_classes, self.params.permutation)
 

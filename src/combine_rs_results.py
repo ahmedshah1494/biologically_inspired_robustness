@@ -13,7 +13,11 @@ result_files = [f'{args.dir}/{f}' for f in os.listdir(args.dir)]
 pnr = {}
 labels = []
 for fp in result_files:
-    r = load_json(fp)
+    try:
+        r = load_json(fp)
+    except:
+        print(f'could not open {fp}. skipping...')
+        continue
     name, _ = os.path.basename(fp).replace('rs_result_', '').split('_')
     r['radii'] = r.pop('radius')
     labels.append(r["Y"])

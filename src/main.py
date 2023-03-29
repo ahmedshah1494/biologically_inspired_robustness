@@ -9,6 +9,8 @@ import evaluation_tasks as eval
 from adversarialML.biologically_inspired_models.src.runners import AdversarialAttackBatteryRunner, AdversarialExperimentRunner, RandomizedSmoothingRunner
 from utils import get_model_checkpoint_paths
 
+# torch.autograd.set_detect_anomaly(True)
+
 def load_model_from_ckpdir(d):
     files = os.listdir(d)
     model_file = [f for f in files if f.startswith('model')][0]
@@ -30,6 +32,7 @@ attacks =  {
             'APGDL2': eval.get_apgd_l2_atk, 
             'APGDL2_EOT20': eval.get_eot20_apgd_l2_atk,
             'APGDL2_EOT50': eval.get_eot50_apgd_l2_atk,
+            'APGDL1': eval.get_apgd_l1_atk,
             # 'APGD_Transfer_MM8L':eval.get_transfered_atk(
             # '/share/workhorse3/mshah1/biologically_inspired_models/logs/cifar10-0.0/'
             # 'Cifar10AutoAugmentMLPMixer8LTask-50K/4/'
@@ -58,6 +61,8 @@ if __name__ == '__main__':
     parser.add_argument('--attacks', nargs='+', type=str, choices=attacks.keys(), default=['APGD'])
     parser.add_argument('--eps_list', nargs='+', type=float, default=[0., 0.008, 0.016, 0.024])
     parser.add_argument('--run_randomized_smoothing_eval', action='store_true')
+    parser.add_argument('--rs_start_batch_idx', type=int, default=0)
+    parser.add_argument('--rs_end_batch_idx', type=int)
     parser.add_argument('--output_to_task_logdir', action='store_true')
     parser.add_argument('--center_fixation', action='store_true')
     parser.add_argument('--five_fixations', action='store_true')
@@ -69,6 +74,8 @@ if __name__ == '__main__':
     parser.add_argument('--use_residual_img', action='store_true')
     parser.add_argument('--use_common_corruption_testset', action='store_true')
     parser.add_argument('--add_fixed_noise_patch', action='store_true')
+    parser.add_argument('--add_random_noise', action='store_true')
+    parser.add_argument('--multi_randaugment', action='store_true')
     parser.add_argument('--view_scale', type=int, default=None)
     parser.add_argument('--use_lightning_lite', action='store_true')
     parser.add_argument('--use_bf16_precision', action='store_true')
@@ -100,14 +107,18 @@ if __name__ == '__main__':
                                                     add_fixed_noise_patch=args.add_fixed_noise_patch, 
                                                     use_common_corruption_testset=args.use_common_corruption_testset,
                                                     disable_reconstruction=args.disable_reconstruction,
-                                                    use_residual_img=args.use_residual_img, fixate_in_bbox=args.bb_fixations)()
+                                                    use_residual_img=args.use_residual_img, fixate_in_bbox=args.bb_fixations,
+                                                    enable_random_noise=args.add_random_noise,
+                                                    apply_rand_affine_augments=args.multi_randaugment
+                                                    )()
         runner_cls = AdversarialAttackBatteryRunner
         runner_kwargs = {
             'output_to_ckp_dir': (not args.output_to_task_logdir)
         }
     elif args.run_randomized_smoothing_eval:
         task = eval.get_randomized_smoothing_task(task_cls, args.num_test, args.eps_list, args.batch_size, rs_batch_size=args.batch_size,
-                                                    center_fixation=args.center_fixation, five_fixation_ensemble=args.five_fixations)()
+                                                    center_fixation=args.center_fixation, five_fixation_ensemble=args.five_fixations,
+                                                    start_idx=args.rs_start_batch_idx, end_idx=args.rs_end_batch_idx)()
         runner_cls = RandomizedSmoothingRunner
         if args.use_lightning_lite:
             runner_kwargs = {
@@ -153,8 +164,12 @@ if __name__ == '__main__':
     else:
         ckp_pths = [None]
     for ckp_pth in ckp_pths:
+        if (not args.eval_only) and ('lightning_kwargs' in runner_kwargs):
+            runner_kwargs['lightning_kwargs']['resume_from_checkpoint'] = ckp_pth
         runner = runner_cls(task, num_trainings=args.num_trainings, ckp_pth=ckp_pth, load_model_from_ckp=(ckp_pth is not None), **runner_kwargs)
         if args.eval_only:
+            with open(f'{os.path.dirname(os.path.dirname(ckp_pth))}/eval_cmd_{time()}.txt', 'w') as f:
+                f.write(str(args))
             runner.create_trainer()
             runner.test()
         elif args.prune_and_test:
@@ -163,3 +178,5 @@ if __name__ == '__main__':
             runner.test()
         else:
             runner.run()
+            with open(f'{runner.trainer.logdir}/train_cmd_{time()}.txt', 'w') as f:
+                f.write(str(args))

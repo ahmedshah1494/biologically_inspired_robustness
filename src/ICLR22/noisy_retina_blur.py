@@ -878,7 +878,7 @@ class Ecoset10NoisyRetinaBlurWRandomScalesCyclicRandAugmentMLPMixerS16(AbstractT
             ),
             AdamOptimizerConfig(weight_decay=5e-5),
             OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
-            logdir=LOGDIR, batch_size=32) # run with 4 GPUs to get batch size 128
+            logdir=LOGDIR, batch_size=128)
 
 class Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicRandAugmentMLPMixerS16(Ecoset10NoisyRetinaBlurWRandomScalesCyclicRandAugmentMLPMixerS16):
     noise_std = 0.25
@@ -919,7 +919,7 @@ class Ecoset10NoisyRetinaBlurWRandomScalesCyclicRandAugmentViTB16(AbstractTask):
             ),
             AdamOptimizerConfig(weight_decay=5e-5),
             OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=375, pct_start=0.2, anneal_strategy='linear'),
-            logdir=LOGDIR, batch_size=32) # run with 4 GPUs to get batch size 128
+            logdir=LOGDIR, batch_size=128) 
 
 class Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicRandAugmentViTB16(Ecoset10NoisyRetinaBlurWRandomScalesCyclicRandAugmentViTB16):
     noise_std = 0.25

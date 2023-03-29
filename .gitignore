@@ -6,3 +6,5 @@ MNIST/*
 *.csv
 *.pdf
 *.xlsx
+*ipynb
+*.npz
