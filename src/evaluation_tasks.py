@@ -345,15 +345,22 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
             if enable_random_noise:
                 p = set_gaussian_noise_param(p, 'add_noise_during_inference', True)
                 p = set_layer_param(p, VOneBlock, 'add_noise_during_inference', True)
+            else:
+                p = set_gaussian_noise_param(p, 'add_noise_during_inference', False)
+                p = set_layer_param(p, VOneBlock, 'add_noise_during_inference', False)
+            if add_fixed_noise_patch:
+                p = set_gaussian_noise_param(p, 'add_deterministic_noise_during_inference', True)
+                p = set_layer_param(p, VOneBlock, 'add_deterministic_noise_during_inference', True)
+            else:
+                p = set_gaussian_noise_param(p, 'add_deterministic_noise_during_inference', False)
+                p = set_layer_param(p, VOneBlock, 'add_deterministic_noise_during_inference', False)
+                print(p)
             if apply_rand_affine_augments:
                 p = setup_for_multi_randaugments(p, num_affine_augments)
             if disable_retina:
                 p = disable_retina_processing(p)
             else:
                 p = set_retina_param(p, 'view_scale', view_scale)
-                if add_fixed_noise_patch:
-                    p = set_gaussian_noise_param(p, 'add_deterministic_noise_during_inference', True)
-                    p = set_layer_param(p, VOneBlock, 'add_deterministic_noise_during_inference', True)
                 if center_fixation:
                     p = set_retina_loc_mode(p, 'center')
                 elif five_fixation_ensemble:
