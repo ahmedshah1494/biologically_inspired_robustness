@@ -72,6 +72,11 @@ def seperable_gaussian_blur_pytorch(img, kernel):
     blurred_img = rearrange(blurred_img, '(b w) c h -> b c h w', b=b)
     return blurred_img
 
+def seperable_DoG_blur_pytorch(img, kernels):
+    img1 = seperable_gaussian_blur_pytorch(img, kernels[0])
+    img2 = seperable_gaussian_blur_pytorch(img, kernels[1])
+    return img1-img2
+
 def _get_gaussian_filtered_image_and_density_mat_pytorch(img, isobox_w, avg_bins, loc_idx, kernels, kernel_width, shuffle_pixels=True, blur=True, gblur_fn=gaussian_blur_pytorch):
     filtered_img = torch.zeros_like(img) if blur else img
     density_mat = torch.zeros_like(img)
@@ -194,6 +199,7 @@ class GaussianNoiseLayer(AbstractModel):
         add_noise_during_inference: bool = False
         add_deterministic_noise_during_inference: bool = False
         max_input_size: List[int] = [3, 224, 224]
+        neuronal_noise: bool = False
 
     def __init__(self, params) -> None:
         super().__init__(params)
@@ -202,7 +208,7 @@ class GaussianNoiseLayer(AbstractModel):
             self.register_buffer('noise_patch', torch.empty(self.params.max_input_size).normal_(0, self.std))
     
     def __repr__(self):
-        return f"GaussianNoiseLayer(std={self.std})"
+        return f"GaussianNoiseLayer(std={self.std}, neuronal={self.params.neuronal_noise})"
     
     def forward(self, img):
         if self.training or self.params.add_noise_during_inference:
@@ -214,6 +220,8 @@ class GaussianNoiseLayer(AbstractModel):
                 d = torch.empty_like(img).normal_(0, self.std, generator=torch.Generator(device=img.device).manual_seed(51972691))
             else:
                 d = 0
+        if self.params.neuronal_noise:
+            d = d * torch.sqrt(torch.relu(img.clone()) + 1e-5)
         return img + d
 
     def compute_loss(self, x, y, return_logits=True, **kwargs):
@@ -286,6 +294,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         no_blur: bool = False
         scale: float = 0.05
         use_1d_gkernels: bool = False
+        min_bincount: int = 224//16
 
     def __init__(self, params, eps=1e-5) -> None:
         super().__init__(params)
@@ -304,12 +313,12 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         max_dim = max(self.input_shape)
         d = np.arange(max_dim)/max_dim
         cone_density = dist_to_prob(d, self.cone_std)
-        clr_isobox_w, clr_avg_bins, bins = get_isodensity_box_width(cone_density, 'auto', min_bincount=img_width//16)
+        clr_isobox_w, clr_avg_bins, bins = get_isodensity_box_width(cone_density, 'auto', min_bincount=params.min_bincount)
         self.clr_isobox_w = clr_isobox_w
         self.clr_avg_bins = clr_avg_bins
 
         self.rod_density = (1 - dist_to_prob(d, self.rod_std)) * self.max_rod_density
-        gry_isobox_w, gry_avg_bins, _ = get_isodensity_box_width(-self.rod_density, 'auto', min_bincount=img_width//16)
+        gry_isobox_w, gry_avg_bins, _ = get_isodensity_box_width(-self.rod_density, 'auto', min_bincount=params.min_bincount)
         self.gry_avg_bins = -gry_avg_bins
         self.gry_isobox_w = gry_isobox_w
 
@@ -325,6 +334,8 @@ class RetinaBlurFilter(AbstractRetinaFilter):
 
         max_std = max(clr_stds + gry_stds)
         self.kernel_size = min(4*int(np.ceil(max_std))+1, max_kernel_size)
+        if self.kernel_size % 2 == 0:
+            self.kernel_size -= 1
 
         if self.apply_blur:
             # self.clr_kernels = nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, self.prob2std(p)), requires_grad=False) for p in self.clr_avg_bins])
@@ -405,7 +416,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
             final_img = clr_filtered_img
         # final_img = torch.clamp(final_img, 0, 1.)
         # nplots = 5
-        # print(img[0].min(), img[0].max(), clr_filtered_img[0].min(), clr_filtered_img[0].max(), gry_filtered_img[0].min(), gry_filtered_img[0].max(), final_img[0].min(), final_img[0].max())
+        # # print(img[0].min(), img[0].max(), clr_filtered_img[0].min(), clr_filtered_img[0].max(), gry_filtered_img[0].min(), gry_filtered_img[0].max(), final_img[0].min(), final_img[0].max())
         # f = plt.figure(figsize=(20,nplots))
         # plt.subplot(1,nplots,1)
         # plt.title('original')
@@ -413,16 +424,16 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         # plt.subplot(1,nplots,2)
         # plt.title('Cone Output')
         # plt.imshow(convert_image_tensor_to_ndarray(clr_filtered_img[0]))
-        # plt.subplot(1,nplots,3)
-        # plt.title('Rod Output')
-        # plt.imshow(convert_image_tensor_to_ndarray(gry_filtered_img[0]))
+        # # plt.subplot(1,nplots,3)
+        # # plt.title('Rod Output')
+        # # plt.imshow(convert_image_tensor_to_ndarray(gry_filtered_img[0]))
         # plt.subplot(1,nplots,4)
         # plt.title('Combined Output')
         # plt.imshow(convert_image_tensor_to_ndarray(final_img[0]))
         # plt.subplot(1,nplots,5)
         # # plt.imshow(cone_density_mat[0,0])
         # plt.plot(np.arange(img.shape[3]), cone_density_mat[0,0, loc_idx[0]].cpu().detach().numpy())
-        # plt.plot(np.arange(img.shape[3]), rod_density_mat[0,0, loc_idx[0]].cpu().detach().numpy())
+        # # plt.plot(np.arange(img.shape[3]), rod_density_mat[0,0, loc_idx[0]].cpu().detach().numpy())
         # plt.savefig('input.png')
         # plt.close()
         return final_img
@@ -435,6 +446,28 @@ class RetinaBlurFilter(AbstractRetinaFilter):
             return logits, loss
         else:
             return loss
+        
+class RetinDoGBlurFilter(RetinaBlurFilter):
+    @define(slots=False)
+    class ModelParams(RetinaBlurFilter.ModelParams):
+        DoG_factor: int = 5
+
+    # def prob2std(self, p):
+    #     s = self.params.DoG_factor*self.scale*max(self.input_shape[1:])*(1-p) + 1e-5
+    #     return s
+
+    def create_kernels(self, std_list):
+        if self.params.use_1d_gkernels:
+            return nn.ParameterList([nn.parameter.Parameter(torch.stack([gaussian_fn(self.kernel_size, std=s), gaussian_fn(self.kernel_size, std=s*self.params.DoG_factor)], 0), requires_grad=False) for s in std_list])
+        else:
+            return nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, s) - gkern(self.kernel_size, s*self.params.DoG_factor), requires_grad=False) for s in std_list])
+    
+    def apply_kernel(self, img, isobox_w, avg_bins, loc_idx, kernels):
+        gfn = seperable_DoG_blur_pytorch if self.params.use_1d_gkernels else gaussian_blur_pytorch
+        return _get_gaussian_filtered_image_and_density_mat_pytorch(img, isobox_w, avg_bins, loc_idx, 
+                                                            kernels, self.kernel_size, blur=self.apply_blur,
+                                                            gblur_fn=gfn
+                                                            )
 
 class RetinaSampleFilter(AbstractModel):
     @define(slots=False)
@@ -711,6 +744,7 @@ class VOneBlock(AbstractModel):
         ksize: int = 25
         stride: int = 4
         model_arch: None = None
+        dropout_p: float = 0.
         add_noise_during_inference: bool = False
         add_deterministic_noise_during_inference: bool = False
 
@@ -718,7 +752,7 @@ class VOneBlock(AbstractModel):
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
         self.params = params
-        kwargs_to_exclude = set(['cls', 'add_noise_during_inference', 'add_deterministic_noise_during_inference'])
+        kwargs_to_exclude = set(['cls', 'add_noise_during_inference', 'add_deterministic_noise_during_inference', 'dropout_p'])
         kwargs = params.asdict(filter=lambda a,v: a.name not in kwargs_to_exclude)
         print(kwargs)
         from adversarialML.biologically_inspired_models.vonenet.vonenet.vonenet import VOneNet
@@ -728,6 +762,8 @@ class VOneBlock(AbstractModel):
             voneblock,
             bottleneck
         )
+        if self.params.dropout_p > 0:
+            self.voneblock.add_module('dropout_0',nn.Dropout(self.params.dropout_p))
 
     
     def forward(self, x):
@@ -739,6 +775,9 @@ class VOneBlock(AbstractModel):
                     self.voneblock[0].fixed_noise = torch.empty(*noise_sz,).normal_(generator=torch.Generator().manual_seed(51972691)).to(x.device)
                 else:
                     self.voneblock[0].noise_mode = None
+        else:
+            self.voneblock[0].noise_mode = self.params.noise_mode
+            self.voneblock[0].fixed_noise = None
         return self.voneblock(x)
 
     def compute_loss(self, x, y, return_logits=True):
