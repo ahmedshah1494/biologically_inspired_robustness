@@ -506,7 +506,7 @@ def plot_imagenet_pgdinf_results():
     outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
     print(df)
     sns.set_style("whitegrid")
-    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    ax = sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df[df['Perturbation Distance ‖ϵ‖∞'] >= 0.002])
     for container in ax.containers:
         ax.bar_label(container, fmt='%d')
     plt.ylim((0,1))
@@ -811,7 +811,7 @@ def plot_ecoset100_certified_robustness_results():
         ('R-Blur-5FI (σ=0.0)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100RetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5Fixation-0.125', '5Fixation-0.25'])),
         ('R-Blur-CFI (σ=0.125)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100NoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['Centered-0.125', 'Centered-0.25'])),
         ('G-Noise (σ=0.125)', (f'{log_root}/ecoset100_folder-0.0/ecoset100_folder-0.0/Ecoset100GaussianNoiseCyclicLRRandAugmentXResNet2x18', ['0.125', '0.25'])),
-        ('G-Noise (σ=0.25)', (f'{log_root}/ecoset100-0.0/Ecoset100GaussianNoiseS2500CyclicLRRandAugmentXResNet2x18', ['Centered-0.25'])),
+        # ('G-Noise (σ=0.25)', (f'{log_root}/ecoset100-0.0/Ecoset100GaussianNoiseS2500CyclicLRRandAugmentXResNet2x18', ['Centered-0.25'])),
     ])
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset100')
     logdicts = get_logdict(plot_config)
@@ -1481,7 +1481,7 @@ def plot_ecoset10_new_rblur_pgdinf_results():
 # plot_ecoset100_pgdinf_results()
 # plot_ecoset_pgdinf_results()
 # plot_ecoset100_pgdl2_results()
-plot_ecoset100_pgdinf_randaug_results()
+# plot_ecoset100_pgdinf_randaug_results()
 # plot_ecoset_pgdl2_results()
 # plot_ecoset_pgdinf_results_with_affine()
 # plot_imagenet_pgdinf_results()
@@ -1497,7 +1497,7 @@ plot_ecoset100_pgdinf_randaug_results()
 
 # plot_cifar10_certified_robustness_results()
 # plot_ecoset10_certified_robustness_results()
-# plot_ecoset100_certified_robustness_results()
+plot_ecoset100_certified_robustness_results()
 # plot_ecoset_certified_robustness_results()
 # plot_imagenet_certified_robustness_results()
 
@@ -1521,7 +1521,7 @@ plot_ecoset100_pgdinf_randaug_results()
 # plot_ecoset100_cc_results()
 # plot_ecoset_cc_results()
 
-plot_ecoset10_new_rblur_pgdinf_results()
+# plot_ecoset10_new_rblur_pgdinf_results()
 # plot_all_ecoset_many_fixation_results()
 # plot_all_ecoset_five_fixation_results()
 
