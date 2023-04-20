@@ -12,6 +12,7 @@ from mllib.runners.configs import BaseExperimentConfig
 from mllib.optimizers.configs import (AbstractOptimizerConfig, AbstractSchedulerConfig, CyclicLRConfig)
 from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.adversarial.attacks import TorchAttackAPGDInfParams, TorchAttackPGDInfParams
+from torch.cuda import device_count as gpu_count
 
 hostname = gethostname()
 if 'bridges2' in hostname:
@@ -20,6 +21,7 @@ else:
     logdir_root = '/share/workhorse3/mshah1'
 
 LOGDIR = f'{logdir_root}/biologically_inspired_models/logs/'
+N_GPUS = gpu_count()
 
 def get_cifar10_params(num_train=25000, num_test=1000):
     p = ImageDatasetFactory.get_params()
