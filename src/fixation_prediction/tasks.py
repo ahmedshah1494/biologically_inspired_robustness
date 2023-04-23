@@ -1,3 +1,4 @@
+import os
 import torchvision
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import NormalizationLayer
 from adversarialML.biologically_inspired_models.src.models import (
@@ -9,7 +10,8 @@ from adversarialML.biologically_inspired_models.src.retina_preproc import (
     RetinaBlurFilter, RetinaNonUniformPatchEmbedding, RetinaWarp, GaussianNoiseLayer)
 from adversarialML.biologically_inspired_models.src.supconloss import \
     TwoCropTransform
-from adversarialML.biologically_inspired_models.src.trainers import LightningAdversarialTrainer, FixationPointLightningAdversarialTrainer,ClickmeImportanceMapLightningAdversarialTrainer, RetinaFilterWithFixationPredictionLightningAdversarialTrainer
+from adversarialML.biologically_inspired_models.src.trainers import LightningAdversarialTrainer
+from adversarialML.biologically_inspired_models.src.fixation_prediction.trainers import FixationPointLightningAdversarialTrainer,ClickmeImportanceMapLightningAdversarialTrainer, RetinaFilterWithFixationPredictionLightningAdversarialTrainer
 from mllib.optimizers.configs import (AdamOptimizerConfig,
                                       CosineAnnealingWarmRestartsConfig,
                                       CyclicLRConfig, LinearLRConfig,
@@ -524,6 +526,59 @@ class ClickmeNoisyRetinaBlurS2500WRandomScalesFixationHeatmapPredictor(ClickmeFi
             OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=4865//2, pct_start=0.1, anneal_strategy='linear'),
             # ReduceLROnPlateauConfig(patience=3),
             logdir=LOGDIR, batch_size=128
+        )
+
+class ClickmeNoisyRetinaBlurS1250WRandomScalesGALAFixationHeatmapPredictorXResNet(ClickmeNoisyRetinaBlurS2500WRandomScalesFixationHeatmapPredictor):
+    noise_std = 0.125
+    def get_dataset_params(self) :
+        p = get_dataset_params(f'{logdir_root}/clickme/shards', SupportedDatasets.CLICKME, num_train=38, num_test=5,
+        train_transforms=[
+               torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+                torchvision.transforms.RandomOrder([
+                    torchvision.transforms.RandomEqualize(0.5),
+                    torchvision.transforms.RandomAutocontrast(0.5),
+                    torchvision.transforms.RandomGrayscale(0.5),
+                    torchvision.transforms.RandomChoice(
+                        [torchvision.transforms.RandomSolarize(0.5, 0.5),
+                        torchvision.transforms.RandomInvert(0.5)], [0.5, 0.5]
+                    ),
+                    torchvision.transforms.RandomPosterize(4, 0.5),
+                ])
+            ],
+        test_transforms=[
+            torchvision.transforms.Resize(self.imgs_size),
+            torchvision.transforms.CenterCrop(self.imgs_size),
+        ])
+        return p
+
+    def get_model_params(self):
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, max_input_size=self.input_size, std=self.noise_std)
+        rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform', loc_mode='center')
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 10), num_classes=10,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor, setup_classification=False,
+                                            setup_feature_extraction=True, widen_stem=self.widen_stem)
+        rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        p = FixationPredictionNetwork.ModelParams(FixationPredictionNetwork,
+                                                    CommonModelParams([3, self.imgs_size, self.imgs_size],), 'gala', rp,
+                                                    backbone_params=resnet_p, loss_fn='mse')
+        return p
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 30
+        return BaseExperimentConfig(
+            ClickmeImportanceMapLightningAdversarialTrainer.TrainerParams(ClickmeImportanceMapLightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=9, tracked_metric='val_loss',
+                    tracking_mode='min', scheduler_step_after_epoch=False
+                )
+            ),
+            AdamOptimizerConfig(lr=0.001, weight_decay=5e-4),
+            # SGDOptimizerConfig(momentum=.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=2432, pct_start=0.05, anneal_strategy='linear'),
+            # ReduceLROnPlateauConfig(patience=3),
+            logdir=LOGDIR, batch_size=128//N_GPUS
         )
 
 class Ecoset10NoisyRetinaBlur2S2500WRandomScalesWClickmeFixationPredictionXResNet2x18(AbstractTask):

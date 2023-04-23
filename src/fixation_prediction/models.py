@@ -169,6 +169,33 @@ class UNet(nn.Module):
         x = self.mask_predictor(x)
         return x
 
+class GALA(nn.Module):
+    def __init__(self, backbone, in_channels=256, shrink_factor=4) -> None:
+        super().__init__()
+        self.backbone = backbone
+        self.global_attn = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1,1)),
+            nn.Conv2d(in_channels, in_channels//shrink_factor, 1),
+            nn.ReLU(),
+            nn.Conv2d(in_channels//shrink_factor, in_channels, 1),
+        )
+        self.local_attn = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels//shrink_factor, 1),
+            nn.ReLU(),
+            nn.Conv2d(in_channels//shrink_factor, 1, 1),
+        )
+        self.integrator = nn.Conv2d(in_channels*2,1,1)
+    
+    def forward(self, x):
+        input_size = x.shape
+        x = self.backbone(x)['out']
+        G = self.global_attn(x)
+        S = self.local_attn(x)
+        H = torch.cat([G+S, G*S], 1)
+        A = self.integrator(H)
+        A = nn.functional.interpolate(A, size=input_size[2:], mode='bilinear', align_corners=False)
+        return A
+
 class DeepLab3p(nn.Module):
     def __init__(self, backbone, nclasses, hl_channels=512, ll_channels=64, upsample_output=True) -> None:
         super().__init__()
@@ -266,7 +293,7 @@ class FixationPredictionNetwork(AbstractModel):
         # self.conv = deeplabv3._deeplabv3_resnet(resnet18(False), 1, False)
         # self.conv.classifier = deeplabv3.DeepLabHead(512, 1)
 
-        if self.params.arch == 'deeplab3p':
+        if (self.params.arch == 'deeplab3p') or (self.params.arch == 'gala'):
             if self.params.backbone_params == 'resnet18':
                 backbone = resnet18()
             elif isinstance(self.params.backbone_params, BaseParameters):
@@ -291,13 +318,23 @@ class FixationPredictionNetwork(AbstractModel):
                     backbone = backbone.resnet
                 backbone = IntermediateLayerGetter(backbone, {self.params.llfeat_module_name:'low_level_feats', 
                                                                 self.params.hlfeat_module_name:'out'})
-                self.conv = DeepLab3p(backbone, 1, hl_channels=self.params.hlfeat_dim, ll_channels=self.params.llfeat_dim)
+                if self.params.arch == 'deeplab3p':
+                    self.conv = DeepLab3p(backbone, 1, hl_channels=self.params.hlfeat_dim, ll_channels=self.params.llfeat_dim)
+                if self.params.arch == 'gala':
+                    self.conv = GALA(backbone, self.params.hlfeat_dim)
             elif isinstance(backbone, ResNet):
-                backbone = IntermediateLayerGetter(backbone, {'layer1':'low_level_feats', 'layer4':'out'})
-                self.conv = DeepLab3p(backbone, 1)
+                if self.params.arch == 'deeplab3p':
+                    backbone = IntermediateLayerGetter(backbone, {'layer1':'low_level_feats', 'layer4':'out'})
+                    self.conv = DeepLab3p(backbone, 1)
+                if self.params.arch == 'gala':
+                    backbone = IntermediateLayerGetter(backbone, {'layer3':'out'})
+                    self.conv = GALA(backbone)
             elif isinstance(backbone, XResNet34):
                 backbone = IntermediateLayerGetter(backbone.resnet, {'4':'low_level_feats', '7':'out'})
-                self.conv = DeepLab3p(backbone, 1, hl_channels=1024, ll_channels=128)
+                if self.params.arch == 'deeplab3p':
+                    self.conv = DeepLab3p(backbone, 1, hl_channels=1024, ll_channels=128)
+                if self.params.arch == 'gala':
+                    self.conv = GALA(backbone, 1024)
             else:
                 raise ValueError(f'backbone must be a subclass of either torchvision.models.ResNet or adversarialML.biologically_inspired_models.src.models.XResNet34 but got {type(backbone)}')
         self.pyramid = GaussianPyramid(5)

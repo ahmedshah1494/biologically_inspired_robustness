@@ -1,3 +1,6 @@
 [submodule "vonenet"]
 	path = vonenet
 	url = https://github.com/dicarlolab/vonenet.git
+[submodule "DeepGaze"]
+	path = DeepGaze
+	url = https://github.com/matthias-k/DeepGaze.git
