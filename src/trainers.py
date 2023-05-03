@@ -612,7 +612,7 @@ class LightningAdversarialTrainer(PytorchLightningTrainer, PruningMixin):
         return attack
     
     def _maybe_attack_batch(self, batch, adv_attack):
-        x,y = batch
+        x,y = batch[:2]
         if adv_attack is not None:
             if x.dim() == 5:
                 y_ = torch.repeat_interleave(y, x.shape[1])
@@ -621,7 +621,8 @@ class LightningAdversarialTrainer(PytorchLightningTrainer, PruningMixin):
                 x = rearrange(x, '(b n) c h w -> b n c h w', b = len(y))
             else:
                 x = adv_attack(x, y)
-        return x,y
+        batch = (x,y, *(batch[2:]))
+        return batch
 
     def training_step(self, batch, batch_idx):
         if self.training_adv_attack is None:
