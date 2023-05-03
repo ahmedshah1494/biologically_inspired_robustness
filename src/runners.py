@@ -13,6 +13,7 @@ class TransferLearningExperimentConfig(BaseExperimentConfig):
     seed_model_path: str = None
     keys_to_skip_regex: str = None
     keys_to_freeze_regex: str = None
+    prefix_map: dict = {}
 
 def print_num_params(model):
     ntrainable = 0
@@ -23,7 +24,8 @@ def print_num_params(model):
         total += p.numel()
     print(f'total parameters={total/1e6}M\ntrainable parameters={ntrainable/1e6}M')
 
-def load_params_into_model(src_model: torch.nn.Module, tgt_model: torch.nn.Module, keys_to_skip_rgx=None, keys_to_freeze_regex=None):
+def load_params_into_model(src_model: torch.nn.Module, tgt_model: torch.nn.Module, keys_to_skip_rgx=None, keys_to_freeze_regex=None,
+                           prefix_map={}):
     if isinstance(src_model, dict):
         # This condition is used to load pytorch lightning checkpoints into
         # non-PL trainers, usually for evaluation
@@ -35,6 +37,13 @@ def load_params_into_model(src_model: torch.nn.Module, tgt_model: torch.nn.Modul
         src_sd = src_model.state_dict()
     if keys_to_skip_rgx is not None:
         src_sd = {k:v for k,v in src_sd.items() if not re.match(keys_to_skip_rgx, k)}
+    new_src_sd = {}
+    for k, v in src_sd.items():
+        for prefix, replacement in sorted(prefix_map.items(), key=lambda e: len(e[0]), reverse=True):
+            if k.startswith(prefix):
+                k = replacement + k[len(prefix):]
+        new_src_sd[k] = v
+    src_sd = new_src_sd
     mismatch = tgt_model.load_state_dict(src_sd, strict=False)
     if len(mismatch.missing_keys) > 0:
         for k in mismatch.missing_keys:
@@ -60,7 +69,8 @@ class AdversarialExperimentRunner(BaseRunner):
             if self.load_model_from_ckp:
                 model = load_params_into_model(src_model, model)
             else:
-                model = load_params_into_model(src_model, model, getattr(ep, 'keys_to_skip_regex', None), getattr(ep, 'keys_to_freeze_regex', None))
+                print(self.ckp_pth)
+                model = load_params_into_model(src_model, model, getattr(ep, 'keys_to_skip_regex', None), getattr(ep, 'keys_to_freeze_regex', None), getattr(ep, 'prefix_map', {}))
         print_num_params(model)
         return model
     
@@ -70,7 +80,7 @@ class AdversarialExperimentRunner(BaseRunner):
         
         ds = self.task.get_dataset_params().dataset
         if isinstance(train_dataset, wds.WebDataset):
-            num_workers = 16 // torch.cuda.device_count()
+            num_workers = 8 // torch.cuda.device_count()
 
             train_dataset = train_dataset.shuffle(10_000).batched(p.batch_size, partial=False)
             val_dataset = val_dataset.batched(p.batch_size, partial=False)
@@ -118,14 +128,14 @@ class AdversarialAttackBatteryRunner(AdversarialExperimentRunner):
         self.output_to_ckp_dir = output_to_ckp_dir
         super().__init__(task, num_trainings, ckp_pth, load_model_from_ckp, wrap_trainer_with_lightning, lightning_kwargs)
     
-    def create_model(self) -> torch.nn.Module:
-        p = self.task.get_model_params()
-        model: torch.nn.Module = p.cls(p)
-        if self.load_model_from_ckp:
-            src_model = self.load_model()
-            model = load_params_into_model(src_model, model)
-        print_num_params(model)
-        return model
+    # def create_model(self) -> torch.nn.Module:
+    #     p = self.task.get_model_params()
+    #     model: torch.nn.Module = p.cls(p)
+    #     if self.load_model_from_ckp:
+    #         src_model = self.load_model()
+    #         model = load_params_into_model(src_model, model)
+    #     print_num_params(model)
+    #     return model
 
     def get_experiment_dir(self, logdir, exp_name):
         if self.output_to_ckp_dir:
