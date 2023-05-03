@@ -85,8 +85,10 @@ def _get_gaussian_filtered_image_and_density_mat_pytorch(img, isobox_w, avg_bins
     loc_idx_ = np.array(loc_idx)+half_ks
     # print(loc_idx_, padded_img.shape)
     imgsize = max(img.shape[2:])
-    if len(isobox_w) > 0:
+    if (len(isobox_w) > 0) and (isobox_w >= imgsize).any():
         maxw = isobox_w[np.argmin(isobox_w[isobox_w >= imgsize] - imgsize)]
+    elif len(isobox_w) > 0:
+        maxw = isobox_w.max()
     for w, p, kern in zip(isobox_w, avg_bins, kernels):
         if w > maxw:
             continue
@@ -237,29 +239,35 @@ class AbstractRetinaFilter(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
         input_shape: Union[int, List[int]] = None
-        loc_mode: Literal['center', 'random_uniform', 'five_fixations', 'const'] = 'random_uniform'
+        loc_mode: Literal['center', 'random_uniform', 'random_five_fixations', 'five_fixations', 'const'] = 'random_uniform'
         loc: Tuple[int, int] = None
         batch_size: int = 128
 
-    def _get_five_fixations(self, img):
+    def _get_five_fixations(self, img, randomize=False):
         _, _, h, w = img.shape
-        pts = [
-            (h//6, w//6),
-            (h//6, w-w//6),
-            (h//2, w//2),
-            (h-h//6, w//6),
-            (h-h//6, w-w//6),
-        ]
+        if randomize:
+            pts = [(p // w, p % w) for p in np.random.choice(h*w, 5)]
+        else:
+            pts = [
+                (h//6, w//6),
+                (h//6, w-w//6),
+                (h//2, w//2),
+                (h-h//6, w//6),
+                (h-h//6, w-w//6),
+            ]
         return pts
     
-    def _get_loc(self, img):
-        input_shape = img.shape[1:]
+    def _get_loc(self, batch, batch_idx):
+        input_shape = batch.shape[1:]
         if self.params.loc_mode == 'center':
             loc = (input_shape[1]//2, input_shape[1]//2)
         elif self.params.loc_mode == 'random_uniform':
             loc = (np.random.randint(0, self.params.input_shape[1]), np.random.randint(0, self.params.input_shape[2]))
         elif self.params.loc_mode == 'const':
-            loc = self.params.loc
+            if isinstance(self.params.loc, tuple):
+                loc = self.params.loc
+            elif np.iterable(self.params.loc):
+                loc = self.params.loc[batch_idx]
         else:
             raise ValueError('params.loc_mode must be "center" or "random_uniform"')
         return loc
@@ -268,14 +276,14 @@ class AbstractRetinaFilter(AbstractModel):
         pass
 
     def forward(self, x, loc_idx=None):
-        if self.params.loc_mode == 'five_fixations':
-            locs = self._get_five_fixations(x)
+        if self.params.loc_mode in ['five_fixations', 'random_five_fixations']:
+            locs = self._get_five_fixations(x, self.params.loc_mode.startswith('random'))
             filtered = [self._forward_batch(x, loc) for loc in locs]
             filtered = torch.stack(filtered, dim=1)
             filtered = filtered.reshape(-1, *(filtered.shape[2:]))
         else:
             batches = torch.split(x, self.params.batch_size)
-            filtered = [self._forward_batch(b, self._get_loc(b) if loc_idx is None else loc_idx) for b in batches]
+            filtered = [self._forward_batch(b, self._get_loc(b,i) if loc_idx is None else loc_idx) for i,b in enumerate(batches)]
             if len(filtered) > 1:
                 filtered = torch.cat(filtered, dim=0)
             else:
@@ -295,6 +303,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         scale: float = 0.05
         use_1d_gkernels: bool = False
         min_bincount: int = 224//16
+        set_min_bin_to_1: bool = False
 
     def __init__(self, params, eps=1e-5) -> None:
         super().__init__(params)
@@ -314,6 +323,8 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         d = np.arange(max_dim)/max_dim
         cone_density = dist_to_prob(d, self.cone_std)
         clr_isobox_w, clr_avg_bins, bins = get_isodensity_box_width(cone_density, 'auto', min_bincount=params.min_bincount)
+        if params.set_min_bin_to_1:
+            clr_avg_bins[-1] = 1.
         self.clr_isobox_w = clr_isobox_w
         self.clr_avg_bins = clr_avg_bins
 
@@ -405,7 +416,6 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         # print([self.prob2std(p) for p in clr_avg_bins], [self.prob2std(p) for p in self.clr_avg_bins])
         # print(gry_isobox_w, self.gry_isobox_w)
         # print([self.prob2std(p) for p in gry_avg_bins], [self.prob2std(p) for p in self.gry_avg_bins])
-        
         clr_filtered_img, cone_density_mat = self.apply_kernel(img, clr_isobox_w, clr_avg_bins, loc_idx, clr_kernels)
         if self.include_gry_img:
             grey_img = torch.repeat_interleave(img.mean(1, keepdims=True), 3, 1)
