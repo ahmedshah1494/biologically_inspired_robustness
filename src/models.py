@@ -1231,6 +1231,7 @@ class XResNet34(AbstractModel):
         normalization_layer_params: BaseParameters = None
         preprocessing_layer_params: BaseParameters = None
         logit_ensembler_params: BaseParameters = None
+        feature_ensembler_params: BaseParameters = None
         setup_feature_extraction: bool = False
         setup_classification: bool = True
         num_classes: int = None
@@ -1273,11 +1274,16 @@ class XResNet34(AbstractModel):
             self.logit_ensembler = self.params.logit_ensembler_params.cls(self.params.logit_ensembler_params)
         else:
             self.logit_ensembler = nn.Identity()
+        if self.params.feature_ensembler_params is not None:
+            self.feature_ensembler = self.params.feature_ensembler_params.cls(self.params.feature_ensembler_params)
+        else:
+            self.feature_ensembler = nn.Identity()
 
     def _get_feats(self, x, **kwargs):
         x = self.normalization_layer(x)
         x = self.preprocessing_layer(x)
         feat = self.resnet(x)
+        feat = self.feature_ensembler(feat)
         return feat
     
     def _run_classifier(self, x):
@@ -1393,6 +1399,68 @@ class LogitAverageEnsembler(AbstractModel):
         if return_logits:
             output = (logits,) + output
         return output
+    
+class MultiheadSelfAttentionEnsembler(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        n: int = None
+        embed_dim: int = None
+        num_heads: int = None
+        dropout: float =0.
+        bias: bool = True
+        add_bias_kv: bool = False
+        add_zero_attn: bool = False
+        kdim: int = None
+        vdim: int = None
+        batch_first: bool = True
+        n_layers: int = 1
+        n_repeats: int = 1
+
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self._make_network()
+
+    def _make_network(self):
+        keys_to_exclude = set(['cls', 'n', 'n_layers', 'n_repeats'])
+        self.attn_layers = nn.ModuleList([
+            nn.MultiheadAttention(**(self.params.asdict(filter=lambda a,v: a.name not in keys_to_exclude))) for i in range(self.params.n_layers)
+        ])
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, self.params.embed_dim))
+        self.position_embeddings = nn.Parameter(torch.zeros(1, self.params.n + 1, self.params.embed_dim))
+        self.intermediate = nn.ModuleList([nn.Sequential(
+            nn.Linear(self.params.embed_dim, self.params.embed_dim),
+            nn.ReLU()
+        ) for i in range(self.params.n_layers)])
+        self.output = nn.ModuleList([nn.Linear(self.params.embed_dim, self.params.embed_dim) for i in range(self.params.n_layers)])
+        self.layernorm_1 = nn.ModuleList([nn.LayerNorm(self.params.embed_dim) for i in range(self.params.n_layers)])
+        self.layernorm_2 = nn.ModuleList([nn.LayerNorm(self.params.embed_dim) for i in range(self.params.n_layers)])
+    
+    def forward(self, x_inp):
+        x = x_inp.flatten(1)
+        # assumes that the batch dimension is flattened from b x n,
+        # where n is seq len
+        x = x.flatten(1).reshape(-1, self.params.n, x.shape[-1])
+        cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x = x + self.position_embeddings
+        for i, (layer, interm, output, lnorm1, lnorm2) in enumerate(zip(
+                self.attn_layers,
+                self.intermediate,
+                self.output,
+                self.layernorm_1,
+                self.layernorm_2
+            )):
+            for j in range(self.params.n_repeats):
+                x_norm = lnorm1(x)
+                x_att, _ = layer(x_norm, x_norm, x_norm)
+                if (i == (self.params.n_layers-1)) and (j == (self.params.n_repeats - 1)):
+                    x, x_att = x[:, 0], x_att[:, 0]
+                x = x + x_att
+                x_int = interm(lnorm2(x))
+                x = output(x_int) + x
+        # avg_x = x_inp.flatten(1).reshape(-1, self.params.n, x.shape[-1]).mean(1)
+        # print(torch.norm(x - avg_x, dim=1).mean())
+        return x
 
 class FovTexVGG(AbstractModel):
     @define(slots=False)
