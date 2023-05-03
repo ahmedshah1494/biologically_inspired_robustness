@@ -31,7 +31,7 @@ from mllib.optimizers.configs import (AdamOptimizerConfig,
 from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
-from task_utils import *
+from adversarialML.biologically_inspired_models.src.task_utils import *
 import torch
 from adversarialML.biologically_inspired_models.src import imagenet_mlp_mixer_tasks_commons
 
