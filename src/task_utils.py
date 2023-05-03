@@ -57,12 +57,13 @@ def get_resize_crop_flip_autoaugment_transforms(size, padding, profile):
         torchvision.transforms.AutoAugment(profile)
     ]
 
-def get_dataset_params(datafolder, dataset, num_train=13_000, num_test=500, train_transforms=None, test_transforms=None):
+def get_dataset_params(datafolder, dataset, num_train=13_000, num_test=500, train_transforms=None, test_transforms=None, **kwargs):
     p = ImageDatasetFactory.get_params()
     p.dataset = dataset
     p.datafolder = datafolder
     p.max_num_train = num_train
     p.max_num_test = num_test
+    p.kwargs = kwargs
     if train_transforms is not None:
         train_transforms.append(torchvision.transforms.ToTensor())
     else:
