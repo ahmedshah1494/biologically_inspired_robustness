@@ -53,10 +53,11 @@ class AutoName(Enum):
 class SupportedModels(AutoName):
     DEEPGAZE2E = auto()
     # DEEPGAZE3 = auto()
-
+SupportedModels.DEEPGAZE2E
 parser = ArgumentParser()
 parser.add_argument('--model', required=True, type=lambda k: SupportedModels._value2member_map_[k], choices=SupportedModels)
-parser.add_argument('--image_size', type=int, default=1024)
+parser.add_argument('--input_image_size', type=int, default=1024)
+parser.add_argument('--output_image_size', type=int, default=320)
 parser.add_argument('--start_idx', type=int, default=0)
 parser.add_argument('--num_test', type=int, default=np.inf)
 parser.add_argument('--image_dir', type=str)
@@ -74,7 +75,7 @@ model = model.cuda()
 
 
 transform = torchvision.transforms.Compose([
-    torchvision.transforms.Resize(args.image_size-1, max_size=args.image_size),
+    torchvision.transforms.Resize(args.input_image_size-1, max_size=args.input_image_size),
     # torchvision.transforms.CenterCrop(args.image_size),
     torchvision.transforms.ToTensor()
 ])
@@ -115,19 +116,20 @@ for i,batch in enumerate(t):
     if not args.overwrite:
         for i, fn in enumerate(filenames):
             [label, fn] = fn.split('/')[-2:]
-            odir = f'{args.output_dir}/{args.model}/{args.split}/{label}/'
+            odir = f'{args.output_dir}/{args.model.value}/{args.split}/{label}/'
             ofn = f'{odir}/{fn.split(".")[0]}.npz'
             if not os.path.exists(ofn):
                 idx_to_include.append(i)
         filenames, x, y = filenames[idx_to_include], x[idx_to_include], y[idx_to_include]
     with torch.no_grad():
-        fixation_maps = model(x.cuda()).cpu().detach().numpy()
+        fixation_maps = model(x.cuda()).cpu().detach()
+        fixation_maps = torchvision.transforms.functional.resize(fixation_maps, args.output_image_size-1, max_size=args.output_image_size).numpy().astype('float16')
 
     print('saving logit maps...')
     for fn, fmap, l in zip(filenames, fixation_maps, y):
         l = int(l)
         [label, fn] = fn.split('/')[-2:]
-        odir = f'{args.output_dir}/{args.model}/{args.split}/{label}/'
+        odir = f'{args.output_dir}/{args.model.value}/{args.split}/{label}/'
         if not os.path.exists(odir):
             os.makedirs(odir)
         fn = fn.split('.')[0]
