@@ -67,6 +67,10 @@ if __name__ == '__main__':
     parser.add_argument('--center_fixation', action='store_true')
     parser.add_argument('--five_fixations', action='store_true')
     parser.add_argument('--bb_fixations', action='store_true')
+    parser.add_argument('--fixate_on_max_loc', action='store_true')
+    parser.add_argument('--use_precomputed_fixations', action='store_true')
+    parser.add_argument('--use_clickme_data', action='store_true')
+    parser.add_argument('--num_fixations', type=int, default=1)
     parser.add_argument('--many_fixations', action='store_true')
     parser.add_argument('--hscan_fixations', action='store_true')
     parser.add_argument('--disable_retina', action='store_true')
@@ -81,6 +85,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_bf16_precision', action='store_true')
     parser.add_argument('--use_f16_precision', action='store_true')
     parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--seed', default=45551323)
     args = parser.parse_args()
 
     print(args)
@@ -89,9 +94,9 @@ if __name__ == '__main__':
         args.eval_only = True
 
     # s = time()
-    # np.random.seed(s)
-    # torch.manual_seed(s)
-    # torch.cuda.manual_seed(s)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
 
     task_cls = get_task_class_from_str(args.task)
     task: AbstractTask = task_cls()
@@ -109,7 +114,11 @@ if __name__ == '__main__':
                                                     disable_reconstruction=args.disable_reconstruction,
                                                     use_residual_img=args.use_residual_img, fixate_in_bbox=args.bb_fixations,
                                                     enable_random_noise=args.add_random_noise,
-                                                    apply_rand_affine_augments=args.multi_randaugment
+                                                    apply_rand_affine_augments=args.multi_randaugment,
+                                                    fixate_on_max_loc=args.fixate_on_max_loc,
+                                                    clickme_data=args.use_clickme_data,
+                                                    use_precomputed_fixations=args.use_precomputed_fixations,
+                                                    num_fixations=args.num_fixations
                                                     )()
         runner_cls = AdversarialAttackBatteryRunner
         runner_kwargs = {
@@ -168,8 +177,8 @@ if __name__ == '__main__':
             runner_kwargs['lightning_kwargs']['resume_from_checkpoint'] = ckp_pth
         runner = runner_cls(task, num_trainings=args.num_trainings, ckp_pth=ckp_pth, load_model_from_ckp=(ckp_pth is not None), **runner_kwargs)
         if args.eval_only:
-            with open(f'{os.path.dirname(os.path.dirname(ckp_pth))}/eval_cmd_{time()}.txt', 'w') as f:
-                f.write(str(args))
+            # with open(f'{os.path.dirname(os.path.dirname(ckp_pth))}/eval_cmd_{time()}.txt', 'w') as f:
+            #     f.write(str(args))
             runner.create_trainer()
             runner.test()
         elif args.prune_and_test:

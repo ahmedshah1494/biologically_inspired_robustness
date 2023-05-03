@@ -9,11 +9,12 @@ import torch
 import torchvision
 
 from trainers import RandomizedSmoothingEvaluationTrainer, MultiAttackEvaluationTrainer, AnnotatedMultiAttackEvaluationTrainer
+from fixation_prediction.trainers import PrecomputedFixationMapMultiAttackEvaluationTrainer, RetinaFilterWithFixationPredictionMultiAttackEvaluationTrainer
 from mllib.datasets.dataset_factory import ImageDatasetFactory, SupportedDatasets
 
 from adversarialML.biologically_inspired_models.src.fixation_prediction.models import RetinaFilterWithFixationPrediction
 from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter, GaussianNoiseLayer, VOneBlock
-from adversarialML.biologically_inspired_models.src.models import GeneralClassifier, LogitAverageEnsembler, XResNet34
+from adversarialML.biologically_inspired_models.src.models import GeneralClassifier, LogitAverageEnsembler, XResNet34, IdentityLayer, CommonModelParams
 from mllib.param import BaseParameters
 import numpy as np
 
@@ -220,7 +221,7 @@ def set_param(p:BaseParameters, param, value):
 def get_param(p:BaseParameters, param_name=None, param_type=None, default=None):
     if (param_name is not None) and hasattr(p, param_name):
         return getattr(p, param_name)
-    elif isinstance(p, param_type):
+    elif (param_type is not None) and isinstance(p, param_type):
         return p
     else:
         p_ = None
@@ -229,33 +230,91 @@ def get_param(p:BaseParameters, param_name=None, param_type=None, default=None):
             if isinstance(v, BaseParameters):
                 p_ = get_param(v, param_name, param_type, default)
                 if p_ is not None:
-                    return p
+                    return p_
             elif np.iterable(v):
                 for x in v:
                     if isinstance(x, BaseParameters):
                         p_ = get_param(x, param_name, param_type, default)
                         if p_ is not None:
-                            return p
+                            return p_
     return p_
 
+def set_param2(p:BaseParameters, value, param_name=None, param_type=None, default=None, set_all=False):
+    # print(p)
+    if (param_name is not None) and hasattr(p, param_name):
+        setattr(p, param_name, value)
+        if not set_all:
+            return True
+
+    param_set = False
+    if hasattr(p, 'asdict'):
+        d = p.asdict(recurse=False)
+        for k,v in d.items():            
+            if np.iterable(v):
+                for i,x in enumerate(v):
+                    if isinstance(x, BaseParameters):
+                        if (param_type is not None) and isinstance(x, param_type):
+                            v[i] = value
+                            param_set = p
+                        else:
+                            param_set = set_param2(x, value, param_name, param_type, default, set_all)
+                        if param_set and (not set_all):
+                            return param_set
+            else:
+                if (param_type is not None) and isinstance(v, param_type):
+                    setattr(p, k, value)
+                    param_set = True
+                else:
+                    param_set = set_param2(v, value, param_name, param_type, default, set_all)
+                if param_set and (not set_all):
+                    return param_set
+    return param_set
+
 def setup_for_five_fixation_evaluation(p: BaseParameters):
-    ensembler_params = LogitAverageEnsembler.ModelParams(LogitAverageEnsembler, n=5)
-    set_param(p, 'logit_ensembler_params', ensembler_params)
+    if get_param(p, 'feature_ensembler_params') is None:
+        ensembler_params = LogitAverageEnsembler.ModelParams(LogitAverageEnsembler, n=5)
+        set_param(p, 'logit_ensembler_params', ensembler_params)
     fpn_params = get_param(p, param_type=RetinaFilterWithFixationPrediction.ModelParams)
+    print(fpn_params)
     if fpn_params is not None:
         set_param(fpn_params, 'num_eval_fixation_points', 5)
-        set_retina_loc_mode(p, 'center')
+        set_retina_loc_mode(p, 'const')
     else:
         set_retina_loc_mode(p, 'five_fixations')
-    print(p)
+    return p
+
+def set_num_fixations(p: BaseParameters, n):
+    if n > 1:
+        if get_param(p, 'feature_ensembler_params') is None:
+            ensembler_params = LogitAverageEnsembler.ModelParams(LogitAverageEnsembler, n=n)
+            set_param(p, 'logit_ensembler_params', ensembler_params)
+    fpn_params = get_param(p, param_type=RetinaFilterWithFixationPrediction.ModelParams)
+    if fpn_params is not None:
+        set_param(fpn_params, 'num_eval_fixation_points', n)
+        set_retina_loc_mode(p, 'const')
+    print(fpn_params)
     return p
 
 def setup_for_hscan_fixation_evaluation(p: BaseParameters):
     ensembler_params = LogitAverageEnsembler.ModelParams(LogitAverageEnsembler, n=5)
     set_param(p, 'logit_ensembler_params', ensembler_params)
     set_retina_loc_mode(p, 'hscan_fixations')
-    print(p)
     return p
+
+def setup_for_fixation_selection(p: BaseParameters):
+    retinap = get_param(p, param_type=AbstractRetinaFilter.ModelParams)
+    noisep = get_param(p, param_type=GaussianNoiseLayer.ModelParams, default=IdentityLayer.get_params())
+    retinafixp = RetinaFilterWithFixationPrediction.ModelParams(RetinaFilterWithFixationPrediction,
+                                                                    CommonModelParams([4, *(retinap.input_shape[1:])]), 
+                                                                    noisep, retinap, IdentityLayer.get_params(),
+                                                                    target_downsample_factor=32, apply_retina_before_fixation=False,
+                                                                    salience_map_provided_as_input_channel=True,
+                                                                    loc_sampling_temp=1.)
+    set_param2(p, retinafixp, param_type=AbstractRetinaFilter.ModelParams)
+    set_param2(p, IdentityLayer.get_params(), param_type=GaussianNoiseLayer.ModelParams)
+    set_param2(p, [4, *(retinap.input_shape[1:])], param_name='input_size', set_all=True)        
+    return p
+    
 
 class MultiRandAffineAugments(torch.nn.Module):
     @define(slots=False)
@@ -304,9 +363,16 @@ def setup_for_multi_randaugments(p, k):
 def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, test_eps=[0.0, 0.016, 0.024, 0.032, 0.048, 0.064], 
                                 center_fixation=False, five_fixation_ensemble=False, hscan_fixation_ensemble=False, view_scale=None, disable_retina=False, 
                                 add_fixed_noise_patch=False, use_common_corruption_testset=False, disable_reconstruction=False, use_residual_img=False,
-                                fixate_in_bbox=False, enable_random_noise=False, apply_rand_affine_augments=False, num_affine_augments=5):
+                                fixate_in_bbox=False, enable_random_noise=False, apply_rand_affine_augments=False, num_affine_augments=5, fixate_on_max_loc=False,
+                                clickme_data=False, use_precomputed_fixations=False, num_fixations=1):
     class AdversarialAttackBatteryEvalTask(task_cls):
         _cls = task_cls
+        def __init__(self) -> None:
+            self.has_fixation_prediction_network = get_param(self.get_model_params(), param_type=RetinaFilterWithFixationPrediction.ModelParams)
+            # self.use_precomputed_fixation_maps = self.get_dataset_params().dataset in [SupportedDatasets.CLICKME,
+            #                    SupportedDatasets.ECOSET10wFIXATIONMAPS_FOLDER,
+            #                    SupportedDatasets.ECOSET100wFIXATIONMAPS_FOLDER] and get_param(self.get_dataset_params(), param_type=AbstractRetinaFilter.ModelParams)
+        
         def get_dataset_params(self):
             p = super().get_dataset_params()
             if p.dataset in [SupportedDatasets.ECOSET, SupportedDatasets.ECOSET100, SupportedDatasets.IMAGENET]:
@@ -336,12 +402,18 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                 if p.dataset == SupportedDatasets.ECOSET10:
                     p.dataset = SupportedDatasets.ECOSET10wBB_FOLDER
                     p.datafolder = os.path.dirname(os.path.dirname(p.datafolder))
+            if clickme_data:
+                assert (p.dataset == SupportedDatasets.IMAGENET) or (p.dataset == SupportedDatasets.IMAGENET_FOLDER)
+                p.dataset = SupportedDatasets.CLICKME
+                p.datafolder = '/share/workhorse3/mshah1/clickme/shards'
 
             p.max_num_test = num_test
             return p
         
         def get_model_params(self):
             p = super().get_model_params()
+            if use_precomputed_fixations and (not fixate_on_max_loc):
+                p = setup_for_fixation_selection(p)
             if enable_random_noise:
                 p = set_gaussian_noise_param(p, 'add_noise_during_inference', True)
                 p = set_layer_param(p, VOneBlock, 'add_noise_during_inference', True)
@@ -367,16 +439,27 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                     p = setup_for_five_fixation_evaluation(p)
                 elif hscan_fixation_ensemble:
                     p = setup_for_hscan_fixation_evaluation(p)
+                else:
+                    p = set_num_fixations(p, num_fixations)
             if disable_reconstruction:
                 p = set_param(p, 'no_reconstruction', True)
             if use_residual_img:
                 p = set_param(p, 'use_residual_during_inference', True)
+            print(p)
             return p
 
         def get_experiment_params(self) -> BaseExperimentConfig:
             p = super(AdversarialAttackBatteryEvalTask, self).get_experiment_params()
+            dp = super().get_dataset_params()
             if fixate_in_bbox:
                 p.trainer_params.cls = AnnotatedMultiAttackEvaluationTrainer
+            elif self.get_dataset_params().dataset in [SupportedDatasets.CLICKME,
+                               SupportedDatasets.ECOSET10wFIXATIONMAPS_FOLDER,
+                               SupportedDatasets.ECOSET100wFIXATIONMAPS_FOLDER]:
+                p.trainer_params.cls = PrecomputedFixationMapMultiAttackEvaluationTrainer
+                p.trainer_params.set_fixation_to_max = fixate_on_max_loc
+            elif self.has_fixation_prediction_network:
+                p.trainer_params.cls = RetinaFilterWithFixationPredictionMultiAttackEvaluationTrainer
             else:
                 p.trainer_params.cls = MultiAttackEvaluationTrainer
             p.batch_size = batch_size
@@ -386,8 +469,12 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
             for name, atkfn in atk_param_fns.items():
                 if apply_rand_affine_augments:
                     name = f'{num_affine_augments}RandAug'
+                if clickme_data:
+                    name = 'ClickMeData'+name
                 if use_common_corruption_testset:
                     name = 'CC'+name
+                if use_precomputed_fixations:
+                    name = 'PrecomputedFmap'+name
                 if disable_reconstruction:
                     name = f'NoRecon'+name
                 if use_residual_img:
@@ -403,12 +490,16 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                         name = f'Scale={view_scale}'+name
                     if center_fixation and isinstance(name, str):
                         name = 'Centered'+name
-                    if five_fixation_ensemble and isinstance(name, str):
+                    elif five_fixation_ensemble and isinstance(name, str):
                         name = '5Fixation'+name
-                    if hscan_fixation_ensemble and isinstance(name, str):
+                    elif hscan_fixation_ensemble and isinstance(name, str):
                         name = 'HscanFixation'+name
-                    if fixate_in_bbox:
+                    elif fixate_in_bbox:
                         name = 'BBFixation'+name
+                    elif fixate_on_max_loc:
+                        name = 'Top1Fixation'+name
+                    else:
+                        name = f'Top{num_fixations}Fixation{"s" if num_fixations > 1 else ""}'+name
                 atk_params += [(name, atkfn(eps)) for eps in test_eps]
             adv_config.testing_attack_params = atk_params
             return p
