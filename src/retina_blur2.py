@@ -195,6 +195,8 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         scale: float = 0.05
         max_res: int = np.inf
         min_res: int = -np.inf
+        rescale_img_with_distance: bool = False
+        gnoise_params: GaussianNoiseLayer.ModelParams = None
 
     def __init__(self, params, eps=1e-5) -> None:
         super().__init__(params)
@@ -246,6 +248,11 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         else:
             self.clr_kernels = [None]*len(self.clr_avg_bins)
             self.gry_kernels = [None]*len(self.gry_avg_bins)
+        
+        if params.gnoise_params is not None:
+            self.gnoise = params.gnoise_params.cls(params.gnoise_params)
+        else:
+            self.gnoise = nn.Identity()
     
     def create_kernels(self, std_list):
         # return nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, s), requires_grad=False) for s in std_list])
@@ -348,12 +355,15 @@ class RetinaBlurFilter(AbstractRetinaFilter):
             filtered = super().forward(x, loc_idx=loc_idx)
         return filtered
 
-    def _get_loc(self, img):
+    def _get_loc(self, img, batch_idx):
         img_shape = img.shape[1:]
         if self.params.loc_mode == 'center':
             loc = self._get_center_loc(img)
         elif self.params.loc_mode == 'const':
-            loc = self.params.loc
+            if isinstance(self.params.loc, tuple):
+                loc = self.params.loc
+            elif np.iterable(self.params.loc):
+                loc = self.params.loc[batch_idx]
         elif (self.params.loc_mode in ['random_uniform', 'random_uniform_2', 'random_in_image']):
             if (self.input_shape[2]>img_shape[2]) and (self.input_shape[1] > img_shape[1]):
                 if (self.params.loc_mode == 'random_uniform'):
@@ -394,8 +404,20 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         # print(gry_isobox_w, self.gry_isobox_w)
         # print([self.prob2std(p) for p in gry_avg_bins], [self.prob2std(p) for p in self.gry_avg_bins])
         # t0 = time()
+        noise = self.gnoise(img) - img
+        clr_rescale_factor = self.clr_isobox_w[-1]/(self.clr_isobox_w[-1]+2*(clr_isobox_w[-1] - self.clr_isobox_w[-1]))
+        # gry_rescale_factor = self.gry_isobox_w[-1]/(self.gry_isobox_w[-1]+2*(gry_isobox_w[-1] - self.gry_isobox_w[-1]))
+        if (clr_rescale_factor < 1) and self.params.rescale_img_with_distance:
+            # print(s, clr_rescale_factor, gry_rescale_factor)
+            img = nn.functional.interpolate(nn.functional.interpolate(img, scale_factor=clr_rescale_factor, mode='bilinear'), size=tuple(img.shape[2:]), mode='bilinear')
+        img = img + noise
         clr_filtered_img, cone_density_mat = self.apply_kernel(img, clr_isobox_w, clr_avg_bins, loc_idx, clr_kernels)
         if self.include_gry_img:
+            # if (gry_rescale_factor < 1) and self.params.rescale_img_with_distance:
+            #     grey_img = nn.functional.interpolate(nn.functional.interpolate(img, scale_factor=gry_rescale_factor), size=tuple(img.shape[2:]))
+            # else:
+            #     grey_img = img
+            # grey_img = grey_img + noise
             grey_img = torch.repeat_interleave(img.mean(1, keepdims=True), 3, 1)
             gry_filtered_img, rod_density_mat = self.apply_kernel(grey_img, gry_isobox_w, gry_avg_bins, loc_idx, gry_kernels)
 
@@ -404,6 +426,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
             final_img = clr_filtered_img
         # print('time:',time() - t0)
         final_img = torch.clamp(final_img, 0, 1.)
+        # final_img = self.gnoise(final_img)
         # nplots = 8
         # print(img[0].min(), img[0].max(), clr_filtered_img[0].min(), clr_filtered_img[0].max(), gry_filtered_img[0].min(), gry_filtered_img[0].max(), final_img[0].min(), final_img[0].max())
         # f = plt.figure(figsize=(20,nplots))
@@ -419,7 +442,7 @@ class RetinaBlurFilter(AbstractRetinaFilter):
         # vf[..., loc_idx[0]:loc_idx[0]+img.shape[2], loc_idx[1]:loc_idx[1]+img.shape[3]] = img[0,:,:h,:w]
         # plt.imshow(convert_image_tensor_to_ndarray(vf))
         # center = vfwidth//2
-        # for w in self.clr_isobox_w:        
+        # for w in clr_isobox_w:        
         #     rect = patches.Rectangle((max(0,center-w)-0.5, max(0,center-w)-0.5), 2*w, 2*w, linewidth=0.5, edgecolor='red', facecolor='none')
         #     ax.add_patch(rect)
         # ax = plt.subplot(1,nplots,3)
