@@ -131,3 +131,32 @@ class RetinaFilterWithFixationPredictionLightningAdversarialTrainer(LightningAdv
         outputs = super().training_step(batch, batch_idx)
         self.decay_temperature()
         return outputs
+    
+class RetinaFilterWithFixationPredictionMultiAttackEvaluationTrainer(MultiAttackEvaluationTrainer):
+    def get_retina_fixation_module(self) -> RetinaFilterWithFixationPrediction:
+        for m in self.model.modules():
+            if isinstance(m, RetinaFilterWithFixationPrediction):                
+                break
+        return m
+    
+    def test_step(self, batch, batch_idx):
+        if len(batch) == 3:
+            x,y,m = batch
+        else:
+            x, y = batch
+        rfmodule = self.get_retina_fixation_module()
+        if rfmodule.params.salience_map_provided_as_input_channel:
+            x = torch.cat([x,m], dim=1)
+            return super().test_step((x,y), batch_idx)
+        else:
+            m = rfmodule(x, return_fixation_maps=True)[1][0]
+            rfmodule.params.salience_map_provided_as_input_channel = True
+            K = rfmodule.params.num_train_fixation_points
+            rfmodule.params.num_train_fixation_points = 1
+            x = torch.cat([x,m], dim=1)
+            output = super().test_step((x,y), batch_idx)
+            rfmodule.params.salience_map_provided_as_input_channel = False
+            rfmodule.params.num_train_fixation_points = K
+            return output
+
+        
