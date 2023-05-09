@@ -23,6 +23,7 @@ from einops import rearrange
 from adversarialML.biologically_inspired_models.src.models import CommonModelParams, ConvEncoder, XResNet34, convbnrelu, bnrelu
 from adversarialML.biologically_inspired_models.src.retina_blur2 import RetinaBlurFilter as RBlur2
 from adversarialML.biologically_inspired_models.DeepGaze import deepgaze_pytorch
+from pathlib import Path
 
 def convert_image_tensor_to_ndarray(img):
     return img.cpu().detach().transpose(0,1).transpose(1,2).numpy()
@@ -242,13 +243,14 @@ class BaseFixationPredictor(AbstractModel):
         always_recompute_fmap: bool = False
         pretrained: bool = True
         min_image_dim: int = 768
+        fixation_width_frac: float = 0.1
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
         print(params)
         self.random_fixation_prob = params.random_fixation_prob
         self.loc_sampling_temperature = params.loc_sampling_temperature
-        self.centerbias_template = nn.parameter.Parameter(torch.FloatTensor(np.load('/home/mshah1/projects/adversarialML/biologically_inspired_models/DeepGaze/centerbias_mit1003.npy')), requires_grad=False)
+        self.centerbias_template = nn.parameter.Parameter(torch.FloatTensor(np.load(Path.home() / 'projects/adversarialML/biologically_inspired_models/DeepGaze/centerbias_mit1003.npy')), requires_grad=False)
         self.mask_past_fixations = params.mask_past_fixations
         self.last_input_image = None
         self.last_fixation_map = None
@@ -300,9 +302,9 @@ class BaseFixationPredictor(AbstractModel):
             return gkern2d
         
         n,_,h,w = fmap.shape
-        std = max(h,w) // 10
-        ks = 4*std + 1
-        hks = ks // 2
+        std = max(h,w) * self.params.fixation_width_frac / 4
+        ks = int(4*std)
+        ks += 1 - (ks % 2)
         self.mask = torch.ones((n,1,h,w), device=fmap.device)
         if not hasattr(self, 'mask_kernel'):
             self.mask_kernel = 1-gkern(ks, std) + 1e-8
@@ -489,7 +491,7 @@ class DeepGazeIIE(BaseFixationPredictor):
 class DeepGazeII(BaseFixationPredictor):
     def __init__(self, params: BaseFixationPredictor.ModelParams) -> None:
         super().__init__(params)
-        self.centerbias_template = nn.parameter.Parameter(torch.FloatTensor(np.load('/home/mshah1/projects/adversarialML/biologically_inspired_models/DeepGaze/centerbias_mit1003.npy')), requires_grad=False)
+        # self.centerbias_template = nn.parameter.Parameter(torch.FloatTensor(np.load('/home/mshah1/projects/adversarialML/biologically_inspired_models/DeepGaze/centerbias_mit1003.npy')), requires_grad=False)
     
     def _make_network(self):
         self.fixation_predictor = deepgaze_pytorch.DeepGazeI(self.params.pretrained)
@@ -794,6 +796,30 @@ class FixationHeatmapPredictionNetwork(AbstractModel):
         else:
             return loss
 
+def _update_mask(fi, I, hks, mask, mask_kernel):
+    fr, fc = (fi // mask.shape[3], fi % mask.shape[3])
+    top, bot, left, right = fr-hks, fr+hks+1, fc-hks, fc+hks+1
+    ktop, kleft = max(0, -top), max(0, -left)
+    kbot = mask_kernel.shape[0] - max(0, bot - mask.shape[2])
+    kright = mask_kernel.shape[1] - max(0, right - mask.shape[3])
+    M = mask[I]
+    M[..., max(0,top):bot, max(0,left):right] *= mask_kernel[ktop:kbot, kleft:kright]
+    mask[I] = M
+    return mask
+
+def unnormalized_gkern(kernlen=256, std=128):
+    def gaussian_fn(M, std):
+        n = torch.cat([torch.arange(M//2,-1,-1), torch.arange(1, M//2+1)])
+        # w = torch.exp(-0.5*((n/std)**2))/(np.sqrt(2*np.pi)*std)
+        sig2 = 2 * std * std
+        w = torch.exp(-n ** 2 / sig2)
+        return w
+    assert kernlen%2 == 1
+    """Returns a 2D Gaussian kernel array."""
+    gkern1d = gaussian_fn(kernlen, std=std) 
+    gkern2d = torch.outer(gkern1d, gkern1d)
+    return gkern2d
+
 class RetinaFilterWithFixationPrediction(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
@@ -810,6 +836,9 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
         apply_retina_before_fixation: bool = True
         salience_map_provided_as_input_channel: bool = False
         random_fixation_prob: float = 0.
+        disable: bool = False
+        return_fixation_maps: bool = False
+        return_fixated_images: bool = True
     
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -826,6 +855,11 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
             self.preprocessor = nn.Identity()
         self.retina = self.params.retina_params.cls(self.params.retina_params)
         self.retina.loc_mode = self.retina.params.loc_mode = 'const'
+        if isinstance(self.params.fixation_params, BaseFixationPredictor.ModelParams):
+            s = self.retina._get_view_scale()
+            w = 2*self.retina.clr_isobox_w[::-1][s] / self.params.target_downsample_factor
+            frac = w / max(self.retina.input_shape[1:])
+            self.params.fixation_params.fixation_width_frac = frac
         self.fixation_model = self.params.fixation_params.cls(self.params.fixation_params)
         if self.params.freeze_fixation_model:
             self.fixation_model.requires_grad_(False)
@@ -869,38 +903,14 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
                 loc = (row, col)
         return tuple(loc)
     
-
-    def gkern(self, kernlen=256, std=128):
-        def gaussian_fn(M, std):
-            n = torch.cat([torch.arange(M//2,-1,-1), torch.arange(1, M//2+1)])
-            # w = torch.exp(-0.5*((n/std)**2))/(np.sqrt(2*np.pi)*std)
-            sig2 = 2 * std * std
-            w = torch.exp(-n ** 2 / sig2)
-            return w
-        assert kernlen%2 == 1
-        """Returns a 2D Gaussian kernel array."""
-        gkern1d = gaussian_fn(kernlen, std=std) 
-        gkern2d = torch.outer(gkern1d, gkern1d)
-        return gkern2d
-    
     def get_topk_fixations(self, fmap, K):
-        def _update_mask(fi, I, hks, mask, mask_kernel):
-            fr, fc = (fi // mask.shape[3], fi % mask.shape[3])
-            top, bot, left, right = fr-hks, fr+hks+1, fc-hks, fc+hks+1
-            ktop, kleft = max(0, -top), max(0, -left)
-            kbot = mask_kernel.shape[0] - max(0, bot - mask.shape[2])
-            kright = mask_kernel.shape[1] - max(0, right - mask.shape[3])
-            M = mask[I]
-            M[..., max(0,top):bot, max(0,left):right] *= mask_kernel[ktop:kbot, kleft:kright]
-            mask[I] = M
-
         n,_,h,w = fmap.shape
         std = max(h,w) / 10
         ks = int(4*std) 
         ks += int((ks % 2) == 0)
         hks = ks // 2
         mask = torch.ones((n,1,h,w), device=fmap.device)
-        mask_kernel = 1-self.gkern(ks, std) + 1e-8
+        mask_kernel = 1-unnormalized_gkern(ks, std) + 1e-8
         mask_kernel = mask_kernel.to(fmap.device)
         # print(fmap.shape, mask.shape, self.mask_kernel.shape)
         
@@ -1100,6 +1110,8 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
         # return locs
 
     def forward(self, x, return_fixation_maps=False):
+        if self.params.disable:
+            return x
         if not self.ckp_loaded:
             self._maybe_load_ckp()
         self.retina.loc_mode = self.retina.params.loc_mode = 'const'
@@ -1122,10 +1134,15 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
                 x_out[(locs == loc).all(1)] = x_
         else:
             x_out, fixation_maps = self.get_fixations_from_model(x)
-        if return_fixation_maps:
-            return x_out, fixation_maps
-        else:
-            return x_out
+        
+        output = None
+        if self.params.return_fixated_images:
+            output = (x_out, )
+        if self.params.return_fixation_maps or return_fixation_maps:
+            output = output + (fixation_maps,)
+        if len(output) == 1:
+            output = output[0]
+        return output
         #     x = self.preprocess(x)
         #     if self.params.apply_retina_before_fixation:
         #         if isinstance(self.retina, RBlur2):
