@@ -314,6 +314,14 @@ def save_pred_and_label_csv(logdir, outfile, preds, labels, logits):
             for p,l,r,sl in zip(preds[atkname], labels, label_ranks, sorted_logits):
                 f.write(f'{l},{p},{sl[-2]},{sl[-3]},{sl[-4]},{sl[-5]},{r}\n')
 
+def save_logits(logdir, outfile, labels, logits):
+    for atkname, atklogits in logits.items():
+        atklogits = atklogits.astype(np.float16)
+        # sorted_logits_idx = np.argsort(logits[atkname], 1)
+        # t10_sorted_logits_idx = sorted_logits_idx[:, -10:][:, ::-1]
+        # t10_atklogits = np.sort(atklogits, axis=1)[:, -10:][:, ::-1]
+        np.savez_compressed(os.path.join(logdir, f'{atkname}_{outfile}'), labels=labels, logits=atklogits)
+        
 class MultiAttackEvaluationTrainer(AdversarialTrainer):
     def __init__(self, params, *args, **kwargs):
         super().__init__(params, *args, **kwargs)
@@ -330,6 +338,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         update_and_save_logs(self.logdir, self.metrics_filename, load_json, write_json, self.save_training_logs, 
                                 train_metrics['train_accuracy'], test_outputs['test_acc'])
         save_pred_and_label_csv(self.per_attack_logdir, 'label_and_preds.csv', test_outputs['preds'], test_outputs['labels'], test_outputs['logits'])
+        # save_logits(self.per_attack_logdir, 'logits.npz', test_outputs['labels'], test_outputs['logits'])
         # update_and_save_logs(self.logdir, self.data_and_pred_filename, load_pickle, write_pickle, self.save_data_and_preds,
         #                         test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
         # self.save_training_logs(train_metrics['train_accuracy'], test_outputs['test_acc'])
@@ -361,6 +370,8 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         return new_outputs, metrics
 
     def test_step(self, batch, batch_idx):
+        clean_x = batch[0].clone()
+
         test_pred = {}
         adv_x = {}
         test_loss = {}
@@ -381,11 +392,9 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
                 raise NotImplementedError(f'{type(atk)} is not supported')
             atk_name = f"{atk.__class__.__name__ if name is None else name}-{eps}"
 
-            clean_x = batch[0]
-            batch = self._maybe_attack_batch(batch, atk if eps > 0 else None)
-            x, y = batch[0], batch[1]
-
-            logits, loss = self._get_outputs_and_loss(*batch)
+            adv_batch = self._maybe_attack_batch(batch, atk if eps > 0 else None)
+            x, y = adv_batch[0], adv_batch[1]
+            logits, loss = self._get_outputs_and_loss(*adv_batch)
             logits = logits.detach().cpu()
             
             y = y.detach().cpu()
@@ -397,7 +406,6 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
 
             preds = get_preds_from_logits(logits)
             loss = loss.mean().detach().cpu()
-
             test_pred[atk_name] = preds.numpy().tolist()
             adv_x[atk_name] = x.detach().cpu().numpy()
             test_loss[atk_name] = loss
