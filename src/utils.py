@@ -82,8 +82,9 @@ def get_eps_from_logdict_key(s):
         eps = float(s)
         atkname = ''
     else:
-        atkname, eps = s.split('-')
-        eps = float(eps)
+        split = s.split('-')
+        atkname = '-'.join(split[:-1])
+        eps = float(split[-1])
     return atkname, eps
 
 def _load_logs(logdir, model_filename='model_ckp.json', metrics_filename='metrics.json',
