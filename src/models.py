@@ -1239,6 +1239,7 @@ class XResNet34(AbstractModel):
         widen_factor: int = 1.
         widen_stem: bool = False
         stem_sizes: Tuple[int,int,int] = (32,32,64)
+        drop_layers: List[int] = []
 
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
@@ -1254,6 +1255,8 @@ class XResNet34(AbstractModel):
                                 stem_szs= self.params.stem_sizes if not self.params.widen_stem else (self.params.widen_factor*self.params.stem_sizes[0],self.params.widen_factor*self.params.stem_sizes[1],self.params.stem_sizes[2]),
                                 ks=self.params.kernel_size
                             )
+        for i in self.params.drop_layers:
+            resnet[i] = nn.Identity()
         resnet[-1] = nn.Identity()
         return resnet
 
@@ -1320,6 +1323,8 @@ class XResNet18(XResNet34):
                                 stem_szs= self.params.stem_sizes if not self.params.widen_stem else (self.params.widen_factor*self.params.stem_sizes[0],self.params.widen_factor*self.params.stem_sizes[1],self.params.stem_sizes[2]),
                                 ks=self.params.kernel_size,
                             )
+        for i in self.params.drop_layers:
+            resnet[i] = nn.Identity()
         resnet[-1] = nn.Identity()
         return resnet
 
@@ -1333,6 +1338,8 @@ class XResNet50(XResNet34):
                                 stem_szs= self.params.stem_sizes if not self.params.widen_stem else (self.params.widen_factor*self.params.stem_sizes[0],self.params.widen_factor*self.params.stem_sizes[1],self.params.stem_sizes[2]),
                                 ks=self.params.kernel_size
                             )
+        for i in self.params.drop_layers:
+            resnet[i] = nn.Identity()
         resnet[-1] = nn.Identity()
         return resnet
 
@@ -1389,6 +1396,9 @@ class LogitAverageEnsembler(AbstractModel):
         if self.params.reduction == 'mean':
             x = x.mean(1)
         elif self.params.reduction == 'logsumexp':
+            x = torch.logsumexp(x, 1)
+        elif self.params.reduction == 'log_softmax+logsumexp':
+            x = nn.functional.log_softmax(x, -1)
             x = torch.logsumexp(x, 1)
         return x
     
@@ -1461,6 +1471,93 @@ class MultiheadSelfAttentionEnsembler(AbstractModel):
         # avg_x = x_inp.flatten(1).reshape(-1, self.params.n, x.shape[-1]).mean(1)
         # print(torch.norm(x - avg_x, dim=1).mean())
         return x
+
+class LSTMEnsembler(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        n: int = None
+        input_size: int = None
+        hidden_size: int = None
+        num_layers: int = 1
+        bias: bool = True
+        batch_first: bool = True
+        dropout: float = 0.
+        bidirectional: bool = False
+        proj_size: int = 0
+    
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self._make_network()
+
+    def _make_network(self):
+        keys_to_exclude = set(['cls', 'n'])
+        lstm_kwargs = self.params.asdict(filter=lambda a,v: a.name not in keys_to_exclude)
+        self.lstm = nn.LSTM(**lstm_kwargs)
+        h_out = self.params.proj_size if (self.params.proj_size > 0) else self.params.hidden_size
+        d = 2 if self.params.bidirectional else 1
+        self.h0 = nn.parameter.Parameter(torch.zeros(d*self.params.num_layers, self.params.hidden_size))
+        self.c0 = nn.parameter.Parameter(torch.zeros(d*self.params.num_layers, self.params.hidden_size))
+    
+    def forward(self, x_inp):
+        # assumes that the batch dimension is flattened from b x n,
+        # where n is seq len
+        x = x_inp.flatten(1).reshape(-1, self.params.n, self.params.input_size)
+        h0 = self.h0.unsqueeze(1).repeat_interleave(x.shape[0], 1)
+        c0 = self.c0.unsqueeze(1).repeat_interleave(x.shape[0], 1)
+        output, (hn, cn) = self.lstm(x, (h0, c0))
+        last_output = output[:, -1]
+        return last_output
+
+class NormalizationLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        mean: Union[float, List[float]] = [0.485, 0.456, 0.406]
+        std: Union[float, List[float]] = [0.229, 0.224, 0.225]
+
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        if isinstance(self.params.mean, list):
+            self.mean = nn.parameter.Parameter(torch.FloatTensor(self.params.mean).reshape(1,-1,1,1), requires_grad=False)
+        if isinstance(self.params.std, list):
+            self.std = nn.parameter.Parameter(torch.FloatTensor(self.params.std).reshape(1,-1,1,1), requires_grad=False)
+    
+    def __repr__(self):
+        return f'NormalizationLayer(mean={self.params.mean}, std={self.params.std})'
+    
+    def forward(self, x):
+        return (x-self.mean)/self.std
+    
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        loss = torch.zeros((logits.shape[0],), device=x.device)
+        return logits
+    
+class PretrainedTimmModel(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        model_name: str = None
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+        import timm
+        self.model = timm.create_model(params.model_name, pretrained=True)
+        pretrained_cfg = self.model.pretrained_cfg
+        self.norm_layer = NormalizationLayer(NormalizationLayer.ModelParams(
+            NormalizationLayer,
+            mean=list(pretrained_cfg.get('mean', [0.]*3)),
+            std=list(pretrained_cfg.get('std', [1.]*3)),
+        ))
+
+    def forward(self, x):
+        x = self.norm_layer(x)
+        return self.model(x)
+
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        loss = nn.functional.cross_entropy(logits, y)
+        output = (loss,)
+        if return_logits:
+            output = (logits,) + output
+        return output
 
 class FovTexVGG(AbstractModel):
     @define(slots=False)
