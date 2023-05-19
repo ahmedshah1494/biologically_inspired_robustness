@@ -149,7 +149,8 @@ class RetinaFilterWithFixationPredictionMultiAttackEvaluationTrainer(MultiAttack
             x = torch.cat([x,m], dim=1)
             return super().test_step((x,y), batch_idx)
         else:
-            m = rfmodule(x, return_fixation_maps=True)[1][0]
+            m = rfmodule(x, return_fixation_maps=True)[1]
+            # print('in trainer:', torch.norm(torch.flatten(m,1), dim=1))
             rfmodule.params.salience_map_provided_as_input_channel = True
             K = rfmodule.params.num_train_fixation_points
             rfmodule.params.num_train_fixation_points = 1
@@ -158,5 +159,3 @@ class RetinaFilterWithFixationPredictionMultiAttackEvaluationTrainer(MultiAttack
             rfmodule.params.salience_map_provided_as_input_channel = False
             rfmodule.params.num_train_fixation_points = K
             return output
-
-        
