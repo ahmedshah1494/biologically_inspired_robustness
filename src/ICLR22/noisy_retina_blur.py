@@ -4,7 +4,7 @@ from adversarialML.biologically_inspired_models.src.models import (
     CommonModelParams, GeneralClassifier, SequentialLayers, XResNet34, XResNet18, XResNet50, WideResnet, CORnetS,
     ActivationLayer, BatchNorm2DLayer, LogitAverageEnsembler, SupervisedContrastiveTrainingWrapper, IdentityLayer,
     XResNetClassifierWithReconstructionLoss, XResNetClassifierWithEnhancer, XResNetClassifierWithDeepResidualEnhancer,
-    MultiheadSelfAttentionEnsembler)
+    MultiheadSelfAttentionEnsembler, LSTMEnsembler)
 from adversarialML.biologically_inspired_models.src.mlp_mixer_models import LinearLayer
 from adversarialML.biologically_inspired_models.src.retina_blur2 import RetinaBlurFilter as RBlur2
 from adversarialML.biologically_inspired_models.src.retina_preproc import (
@@ -46,7 +46,7 @@ class Cifar10NoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22(Abstr
         return p
 
     def get_model_params(self):
-        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std, max_input_size=self.input_size)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
                                                 rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform')
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
@@ -190,7 +190,7 @@ class Ecoset10NoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Abs
     widen_factor = 2
     noise_std = 0.125
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -205,7 +205,8 @@ class Ecoset10NoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Abs
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
-                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform')
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
+                                                use_1d_gkernels=True)
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 10), num_classes=10,
                                             normalization_layer_params=NormalizationLayer.get_params(),
@@ -610,13 +611,14 @@ class EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18(AbstractT
             ])
         # Pointing to a folder with only the test set, and some dummy train and val data. 
         # Use this on workhorse to avoid delay due to slow NFS.
-        # p.datafolder = f'{logdir_root}/ecoset/eval_dataset_dir'
+        p.datafolder = f'{logdir_root}/ecoset/eval_dataset_dir'
         return p
 
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
-                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform')
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
+                                                use_1d_gkernels=True)
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 565), num_classes=565,
                                             normalization_layer_params=NormalizationLayer.get_params(),
@@ -663,7 +665,8 @@ class ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18(Abstrac
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
-                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform')
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
+                                                use_1d_gkernels=True)
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 1000), num_classes=1000,
                                             normalization_layer_params=NormalizationLayer.get_params(),
@@ -685,6 +688,104 @@ class ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18(Abstrac
             OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=4916, pct_start=0.1, anneal_strategy='cos', div_factor=10, three_phase=True),
             logdir=LOGDIR, batch_size=64
         )
+
+class ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18WLSTMFeatEnsemblingFT(ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18):
+    ckp_pth = f'/ocean/projects/cis220031p/mshah1/biologically_inspired_models/iclr22_logs/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/1/checkpoints/epoch=23-step=117984.pt'
+    
+    def get_dataset_params(self) :
+        p = get_imagenet_folder_params(num_train=1_275_000, train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        # Pointing to a folder with only the test set, and some dummy train and val data. 
+        # Use this on workhorse to avoid delay due to slow NFS.
+        # p.datafolder = f'{logdir_root}/imagenet/eval_dataset_dir'
+        return p
+    
+    def get_model_params(self):
+        lstmp = LSTMEnsembler.ModelParams(LSTMEnsembler, n=5, input_size=1024, hidden_size=1024)
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
+        rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
+                                                loc_mode='random_five_fixations')
+        rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 1000), num_classes=1000,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor, feature_ensembler_params=lstmp)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, resnet_p)
+        return p
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 5
+        return TransferLearningExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            # SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            AdamOptimizerConfig(weight_decay=5e-4),
+            OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=4916//4, pct_start=0.1, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=64*4,
+            seed_model_path=self.ckp_pth,
+            keys_to_skip_regex = r'(classifier.classifier.*)',
+            keys_to_freeze_regex = r'(.*resnet.*)',
+        )
+
+class ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18WMHSAFeatEnsemblingFT(ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18):
+    ckp_pth = f'/ocean/projects/cis220031p/mshah1/biologically_inspired_models/iclr22_logs/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/1/checkpoints/epoch=23-step=117984.pt'
+    num_fixations = 5
+    def get_dataset_params(self) :
+        p = get_imagenet_folder_params(num_train=1_275_000, train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        # Pointing to a folder with only the test set, and some dummy train and val data. 
+        # Use this on workhorse to avoid delay due to slow NFS.
+        # p.datafolder = f'{logdir_root}/imagenet/eval_dataset_dir'
+        return p
+    
+    def get_model_params(self):
+        mhsa_p = MultiheadSelfAttentionEnsembler.ModelParams(MultiheadSelfAttentionEnsembler, n=self.num_fixations, embed_dim=1024, num_heads=1, n_layers=1, n_repeats=1)
+        rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
+        rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
+                                                loc_mode='random_five_fixations', use_1d_gkernels=True)
+        rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 1000), num_classes=1000,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor, feature_ensembler_params=mhsa_p)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, resnet_p)
+        return p
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 5
+        return TransferLearningExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            # SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            AdamOptimizerConfig(weight_decay=5e-4),
+            OneCycleLRConfig(max_lr=0.001, epochs=nepochs, steps_per_epoch=4916//4, pct_start=0.1, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=64*4,
+            seed_model_path=self.ckp_pth,
+            keys_to_skip_regex = r'(classifier.classifier.*)',
+            keys_to_freeze_regex = r'(.*resnet.*)',
+        )
     
 class ImagenetNoisyRetinaBlurBinCt4WRandomScalesCyclicLRRandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224
@@ -704,7 +805,7 @@ class ImagenetNoisyRetinaBlurBinCt4WRandomScalesCyclicLRRandAugmentXResNet2x18(A
             ])
         # Pointing to a folder with only the test set, and some dummy train and val data. 
         # Use this on workhorse to avoid delay due to slow NFS.
-        # p.datafolder = f'{logdir_root}/imagenet/eval_dataset_dir'
+        p.datafolder = f'{logdir_root}/imagenet/eval_dataset_dir'
         return p
 
     def get_model_params(self):
