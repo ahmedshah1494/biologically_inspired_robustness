@@ -302,7 +302,7 @@ def update_and_save_logs(logdir, outfilename, load_fn, write_fn, save_fn, *save_
     else:
         save_fn(*save_fn_args, **save_fn_kwargs)
 
-def save_pred_and_label_csv(logdir, outfile, preds, labels, logits):
+def save_pred_and_label_csv(logdir, outfile, preds, labels, logits, atk_norms):
     for atkname in preds.keys():
         sorted_logits = np.argsort(logits[atkname], 1)
         label_ranks = []
@@ -310,9 +310,16 @@ def save_pred_and_label_csv(logdir, outfile, preds, labels, logits):
             r = sorted_logits.shape[1] - sl.tolist().index(l) - 1
             label_ranks.append(r)
         with open(os.path.join(logdir, f'{atkname}_{outfile}'), 'w') as f:
-            f.write('L,P1,P2,P3,P4,P5,R\n')
-            for p,l,r,sl in zip(preds[atkname], labels, label_ranks, sorted_logits):
-                f.write(f'{l},{p},{sl[-2]},{sl[-3]},{sl[-4]},{sl[-5]},{r}\n')
+            f.write('L,P1,P2,P3,P4,P5,R,norm\n')
+            for p,l,r,sl,nrm in zip(preds[atkname], labels, label_ranks, sorted_logits, atk_norms[atkname]):
+                f.write(f'{l},{p},{sl[-2]},{sl[-3]},{sl[-4]},{sl[-5]},{r},{nrm}\n')
+
+def save_pred_and_label_csv_2(logdir, outfile, preds, labels, batch_idx):
+    mode = 'a' if batch_idx > 0 else 'w'
+    for atkname in preds.keys():
+        with open(os.path.join(logdir, f'{atkname}_{outfile}'), mode) as f:
+            for p,l in zip(preds[atkname], labels):
+                f.write(f'{l},{p}\n')
 
 def save_logits(logdir, outfile, labels, logits):
     for atkname, atklogits in logits.items():
@@ -334,10 +341,17 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         if not os.path.exists(self.per_attack_logdir):
             os.makedirs(self.per_attack_logdir)
 
+    def _maybe_initialize_logger(self):
+        self.global_step = 0
+        return
+    
+    def _log(self, logs, step):
+        return
+
     def save_logs_after_test(self, train_metrics, test_outputs):
         update_and_save_logs(self.logdir, self.metrics_filename, load_json, write_json, self.save_training_logs, 
                                 train_metrics['train_accuracy'], test_outputs['test_acc'])
-        save_pred_and_label_csv(self.per_attack_logdir, 'label_and_preds.csv', test_outputs['preds'], test_outputs['labels'], test_outputs['logits'])
+        save_pred_and_label_csv(self.per_attack_logdir, 'label_and_preds.csv', test_outputs['preds'], test_outputs['labels'], test_outputs['logits'], test_outputs['atk_norms'])
         # save_logits(self.per_attack_logdir, 'logits.npz', test_outputs['labels'], test_outputs['logits'])
         # update_and_save_logs(self.logdir, self.data_and_pred_filename, load_pickle, write_pickle, self.save_data_and_preds,
         #                         test_outputs['preds'], test_outputs['labels'], test_outputs['inputs'], test_outputs['logits'])
@@ -349,7 +363,6 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         outputs = aggregate_dicts(outputs)
         new_outputs = aggregate_dicts(outputs)
         new_outputs = merge_iterables_in_dict(new_outputs)
-        
         labels = np.array(new_outputs['labels'])
         test_acc = {}
         adv_succ = {}
@@ -378,6 +391,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
         test_acc = {}
         test_logits = {}
         target_labels = {}
+        test_atk_norm = {}
         for name, atk in self.testing_adv_attacks:
             if isinstance(atk, FoolboxCWL2AttackWrapper):
                 eps = atk.attack.confidence
@@ -391,13 +405,18 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             else:
                 raise NotImplementedError(f'{type(atk)} is not supported')
             atk_name = f"{atk.__class__.__name__ if name is None else name}-{eps}"
-
+            # if batch_idx < 1119:
+            #     logits = torch.rand(batch[0].shape[0], 10).detach().cpu()
+            #     x, y = batch
+            #     loss = torch.rand(batch[0].shape[0])
+            # else:
             adv_batch = self._maybe_attack_batch(batch, atk if eps > 0 else None)
             x, y = adv_batch[0], adv_batch[1]
             logits, loss = self._get_outputs_and_loss(*adv_batch)
             logits = logits.detach().cpu()
             
             y = y.detach().cpu()
+            atk_norm = torch.flatten(x-clean_x, 1).norm(2, 1)
             acc, _ = compute_accuracy(logits, y)
             if isinstance(atk, torchattacks.attack.Attack) and atk._targeted:
                 y_tgt = atk._get_target_label(*batch)
@@ -412,9 +431,11 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             test_acc[atk_name] = acc
             test_logits[atk_name] = logits.numpy()
             target_labels[atk_name] = y_tgt.detach().cpu().numpy().tolist()
+            test_atk_norm[atk_name] = atk_norm.detach().cpu().numpy().tolist()
             # self.save_per_sample_results(atk_name, clean_x.detach().cpu().numpy(), adv_x[atk_name], y.numpy().tolist(), test_pred[atk_name])
+            save_pred_and_label_csv_2(self.per_attack_logdir, 'label_and_preds_2.csv', test_pred, y.numpy().tolist(), batch_idx)
         metrics = {f'test_acc_{k}':v for k,v in test_acc.items()}
-        return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': adv_x, 'target_labels':target_labels, 'logits': test_logits}, metrics
+        return {'preds':test_pred, 'labels':y.numpy().tolist(), 'inputs': 0., 'target_labels':target_labels, 'logits': test_logits, 'atk_norms':test_atk_norm}, metrics
     
     def save_per_sample_results(self, atk_name, X, adv_X, Y, P):
         for x, adv_x, y, p in zip(X, adv_X, Y, P):
