@@ -103,7 +103,7 @@ def _get_gaussian_filtered_image_and_density_mat_pytorch(img, isobox_w, avg_bins
             # print(w, half_ks, padded_img.shape, crop.shape, max(0,loc_idx_[0]-w-half_ks), loc_idx_[0]+w+half_ks, max(0,loc_idx_[1]-w-half_ks), loc_idx_[1]+w+half_ks)
             filtered_crop = gblur_fn(crop, kern)
             filtered_img[:,:,max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w] = filtered_crop
-        else:
+        elif blur:
             filtered_img[:,:,max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w] = img[:,:,max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w]
         density_mat[:,:,max(0,loc_idx[0]-w):loc_idx[0]+w][:,:,:,max(0,loc_idx[1]-w):loc_idx[1]+w] = p
     return filtered_img, density_mat
@@ -207,7 +207,9 @@ class GaussianNoiseLayer(AbstractModel):
         super().__init__(params)
         self.std = self.params.std
         if self.params.add_deterministic_noise_during_inference:
-            self.register_buffer('noise_patch', torch.empty(self.params.max_input_size).normal_(0, self.std))
+            self.register_buffer('noise_patch', 
+                                 torch.empty(1,*(params.max_input_size)).normal_(0, self.std, generator=torch.Generator().manual_seed(51972691))
+                                 )
     
     def __repr__(self):
         return f"GaussianNoiseLayer(std={self.std}, neuronal={self.params.neuronal_noise})"
@@ -217,9 +219,10 @@ class GaussianNoiseLayer(AbstractModel):
             d = torch.empty_like(img).normal_(0, self.std)
         else:
             if self.params.add_deterministic_noise_during_inference:
-                # b, c, h ,w = img.shape
+                b, c, h ,w = img.shape
                 # d = self.noise_patch[:c, :h, :w].unsqueeze(0)
-                d = torch.empty_like(img).normal_(0, self.std, generator=torch.Generator(device=img.device).manual_seed(51972691))
+                d = self.noise_patch
+                # print(d.min(), d.mean(), d.median(), d.max(), d.sum(), d.abs().sum())
             else:
                 d = 0
         if self.params.neuronal_noise:
@@ -242,6 +245,7 @@ class AbstractRetinaFilter(AbstractModel):
         loc_mode: Literal['center', 'random_uniform', 'random_five_fixations', 'five_fixations', 'const'] = 'random_uniform'
         loc: Tuple[int, int] = None
         batch_size: int = 128
+        straight_through: bool = False
 
     def _get_five_fixations(self, img, randomize=False):
         _, _, h, w = img.shape
@@ -268,6 +272,8 @@ class AbstractRetinaFilter(AbstractModel):
                 loc = self.params.loc
             elif np.iterable(self.params.loc):
                 loc = self.params.loc[batch_idx]
+            else:
+                raise ValueError(f'params.loc must be tuple or (nested) iterable of tuples, but got {self.params.loc}')
         else:
             raise ValueError('params.loc_mode must be "center" or "random_uniform"')
         return loc
@@ -283,11 +289,21 @@ class AbstractRetinaFilter(AbstractModel):
             filtered = filtered.reshape(-1, *(filtered.shape[2:]))
         else:
             batches = torch.split(x, self.params.batch_size)
-            filtered = [self._forward_batch(b, self._get_loc(b,i) if loc_idx is None else loc_idx) for i,b in enumerate(batches)]
+            # filtered = [self._forward_batch(b, self._get_loc(b,i) if loc_idx is None else loc_idx) for i,b in enumerate(batches)]
+            filtered = []
+            for i,b in enumerate(batches):
+                _loc_idx = self._get_loc(b,i) if loc_idx is None else loc_idx
+                if isinstance(_loc_idx, tuple):
+                    filtered.append(self._forward_batch(b, _loc_idx))
+                if isinstance(_loc_idx, list) and isinstance(_loc_idx[0], tuple):
+                    fimg = torch.cat([self._forward_batch(b, li) for li in _loc_idx], 0)
+                    filtered.append(fimg)
             if len(filtered) > 1:
                 filtered = torch.cat(filtered, dim=0)
             else:
                 filtered = filtered[0]
+        if self.params.straight_through:
+            return filtered.detach() + x - x.detach()
         return filtered
 
 class RetinaBlurFilter(AbstractRetinaFilter):
@@ -360,9 +376,9 @@ class RetinaBlurFilter(AbstractRetinaFilter):
     
     def create_kernels(self, std_list):
         if self.params.use_1d_gkernels:
-            return nn.ParameterList([nn.parameter.Parameter(gaussian_fn(self.kernel_size, std=s), requires_grad=False) for s in std_list])
+            return [gaussian_fn(self.kernel_size, std=s) for s in std_list]
         else:
-            return nn.ParameterList([nn.parameter.Parameter(gkern(self.kernel_size, s), requires_grad=False) for s in std_list])
+            return [gkern(self.kernel_size, s) for s in std_list]
         # return nn.ParameterList([nn.parameter.Parameter(gaussian_fn(int(np.ceil(4*s)), std=s), requires_grad=False) for s in std_list])
     
     def apply_kernel(self, img, isobox_w, avg_bins, loc_idx, kernels):
@@ -412,12 +428,14 @@ class RetinaBlurFilter(AbstractRetinaFilter):
             clr_isobox_w = self.clr_isobox_w
             clr_avg_bins = self.clr_avg_bins
             clr_kernels = self.clr_kernels
+        clr_kernels = [k.type(img.dtype).to(img.device) if k is not None else k for k in clr_kernels]
         # print(clr_isobox_w, self.clr_isobox_w)
         # print([self.prob2std(p) for p in clr_avg_bins], [self.prob2std(p) for p in self.clr_avg_bins])
         # print(gry_isobox_w, self.gry_isobox_w)
         # print([self.prob2std(p) for p in gry_avg_bins], [self.prob2std(p) for p in self.gry_avg_bins])
         clr_filtered_img, cone_density_mat = self.apply_kernel(img, clr_isobox_w, clr_avg_bins, loc_idx, clr_kernels)
         if self.include_gry_img:
+            gry_kernels = [k.type(img.dtype).to(img.device) if k is not None else k for k in gry_kernels]
             grey_img = torch.repeat_interleave(img.mean(1, keepdims=True), 3, 1)
             gry_filtered_img, rod_density_mat = self.apply_kernel(grey_img, gry_isobox_w, gry_avg_bins, loc_idx, gry_kernels)
 
@@ -774,15 +792,17 @@ class VOneBlock(AbstractModel):
         )
         if self.params.dropout_p > 0:
             self.voneblock.add_module('dropout_0',nn.Dropout(self.params.dropout_p))
+        v1block = self.voneblock[0]
+        noise_sz = (1, v1block.out_channels, int(v1block.input_size/v1block.stride),
+                                 int(v1block.input_size/v1block.stride))
+        self.detnoise = torch.empty(*noise_sz,).normal_(generator=torch.Generator().manual_seed(51972691))
 
     
     def forward(self, x):
         if (not self.training) and (not self.params.add_noise_during_inference):
                 if self.params.add_deterministic_noise_during_inference:
-                    v1block = self.voneblock[0]
-                    noise_sz = (x.shape[0], v1block.out_channels, int(v1block.input_size/v1block.stride),
-                                 int(v1block.input_size/v1block.stride))
-                    self.voneblock[0].fixed_noise = torch.empty(*noise_sz,).normal_(generator=torch.Generator().manual_seed(51972691)).to(x.device)
+                    noise = self.detnoise.repeat_interleave(x.shape[0], dim=0).to(x.device)
+                    self.voneblock[0].fixed_noise = noise
                 else:
                     self.voneblock[0].noise_mode = None
         else:
