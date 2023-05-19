@@ -84,7 +84,7 @@ class AdversarialExperimentRunner(BaseRunner):
 
             train_dataset = train_dataset.shuffle(10_000).batched(p.batch_size, partial=False)
             val_dataset = val_dataset.batched(p.batch_size, partial=False)
-            test_dataset = test_dataset.batched(p.batch_size, partial=False)
+            test_dataset = test_dataset.batched(p.batch_size, partial=True)
 
             train_loader = wds.WebLoader(train_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(train_dataset) // p.batch_size)
             val_loader = wds.WebLoader(val_dataset, batch_size=None, shuffle=False, pin_memory=True, num_workers=num_workers)#.with_length(len(val_dataset) // p.batch_size)
@@ -92,12 +92,12 @@ class AdversarialExperimentRunner(BaseRunner):
         else:
             train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=p.batch_size, shuffle=True, num_workers=10, pin_memory=True, persistent_workers=True, drop_last=True)
             val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True, drop_last=True)
-            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=p.batch_size, shuffle=False, num_workers=10, pin_memory=True, persistent_workers=True, drop_last=True)
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=p.batch_size, shuffle=False, num_workers=8)
 
         return train_loader, val_loader, test_loader
 
     def _is_exp_complete(self, logdir, i):
-        return os.path.exists(os.path.join(logdir, str(i), 'metrics.json'))
+        return os.path.exists(os.path.join(logdir, str(i), 'metrics.json')) or os.path.exists(os.path.join(logdir, str(i), 'adv_metrics.json'))
 
     def _get_expdir(self, logdir, exp_name):
         exp_name = f'-{exp_name}' if len(exp_name) > 0 else exp_name
