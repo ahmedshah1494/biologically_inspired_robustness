@@ -2,19 +2,22 @@ from copy import deepcopy
 import math
 import os
 from time import time
+from attr import field
 from attrs import define, asdict
 from mllib.adversarial.attacks import AttackParamFactory, SupportedAttacks, SupportedBackend, AbstractAttackConfig
 from mllib.runners.configs import BaseExperimentConfig
 import torch
 import torchvision
+from adversarialML.biologically_inspired_models.src.fixation_prediction.precomputed_fixation_attacks import PrecomputedFixationAPGDAttack
 
 from trainers import RandomizedSmoothingEvaluationTrainer, MultiAttackEvaluationTrainer, AnnotatedMultiAttackEvaluationTrainer
 from fixation_prediction.trainers import PrecomputedFixationMapMultiAttackEvaluationTrainer, RetinaFilterWithFixationPredictionMultiAttackEvaluationTrainer
 from mllib.datasets.dataset_factory import ImageDatasetFactory, SupportedDatasets
 
-from adversarialML.biologically_inspired_models.src.fixation_prediction.models import RetinaFilterWithFixationPrediction
+from adversarialML.biologically_inspired_models.src.fixation_prediction.models import RetinaFilterWithFixationPrediction, MultiFixationTiedBackboneClassifier
 from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter, GaussianNoiseLayer, VOneBlock
-from adversarialML.biologically_inspired_models.src.models import GeneralClassifier, LogitAverageEnsembler, XResNet34, IdentityLayer, CommonModelParams
+from adversarialML.biologically_inspired_models.src.models import GeneralClassifier, LogitAverageEnsembler, XResNet34, IdentityLayer, CommonModelParams, MultiheadSelfAttentionEnsembler
+from adversarialML.biologically_inspired_models.src.fixation_prediction.fixation_aware_attack import FixationAwareAPGDAttack
 from mllib.param import BaseParameters
 import numpy as np
 
@@ -25,6 +28,59 @@ def get_pgd_atk(eps):
     atk_p.step_size = eps/40
     atk_p.random_start = True
     return atk_p
+
+def get_pgd_75s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 75
+    atk_p.step_size = eps/30
+    atk_p.random_start = True
+    return atk_p
+
+def get_pgd_50s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 50
+    atk_p.step_size = eps/20
+    atk_p.random_start = True
+    return atk_p
+
+def get_pgd_25s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 25
+    atk_p.step_size = eps/10
+    atk_p.random_start = True
+    atk_p.verbose = True
+    return atk_p
+
+def get_pgd_10s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 10
+    atk_p.step_size = eps/4
+    atk_p.random_start = True
+    atk_p.verbose = True
+    return atk_p
+
+def get_pgd_5s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 5
+    atk_p.step_size = eps
+    atk_p.random_start = True
+    atk_p.verbose = True
+    return atk_p
+
+def get_pgd_1s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 1
+    atk_p.step_size = eps
+    atk_p.random_start = True
+    atk_p.verbose = True
+    return atk_p
+
 
 def get_eot10_pgd_atk(eps):
     p = get_pgd_atk(eps)
@@ -40,6 +96,42 @@ def get_apgd_atk(eps):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
     atk_p.eps = eps
     atk_p.nsteps = 100
+    return atk_p
+
+def get_apgd_75s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 75
+    return atk_p
+
+def get_apgd_50s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 50
+    return atk_p
+
+def get_apgd_25s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 25
+    return atk_p
+
+def get_apgd_10s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 10
+    return atk_p
+
+def get_apgd_5s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 5
+    return atk_p
+
+def get_apgd_1s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDLINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 1
     return atk_p
 
 def get_eot10_apgd_atk(eps):
@@ -63,6 +155,12 @@ def get_apgd_l2_atk(eps):
     atk_p.nsteps = 100
     return atk_p
 
+def get_apgd_l2_25s_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDL2, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    atk_p.nsteps = 25
+    return atk_p
+
 def get_eot10_apgd_l2_atk(eps):
     p = get_apgd_l2_atk(eps)
     p.eot_iter = 10
@@ -82,6 +180,12 @@ def get_apgd_l1_atk(eps):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.APGDL1, SupportedBackend.AUTOATTACK)
     atk_p.eps = eps
     atk_p.nsteps = 100
+    return atk_p
+
+def get_autoattack_linf_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.AUTOATTACK, SupportedBackend.TORCHATTACKS)
+    atk_p.norm = 'Linf'
+    atk_p.eps = eps
     return atk_p
 
 def get_square_atk(eps):
@@ -121,6 +225,83 @@ def get_cwl2_atk(conf):
     atk_p.confidence = conf
     atk_p.steps = 100
     atk_p.run_params.epsilons = [1000.]
+    return atk_p
+
+
+@define(slots=False)
+class FixationAwareAPGDAttackParams(AbstractAttackConfig):
+    _cls = FixationAwareAPGDAttack
+    num_fixation_samples: int = 50
+    fixation_selection_attack_num_steps: int = 20
+    norm: str = 'Linf'
+    eps: float = 8/255
+    nsteps: int = 50
+    n_restarts: int = 2
+    seed: int = field(factory=lambda : int(time()))
+    loss: str = 'ce'
+    eot_iter: int = 1
+    rho: float = .75
+    verbose:bool=True
+
+    def asdict(self):
+        d = super().asdict()
+        d['steps'] = d.pop('nsteps')
+        return d
+        
+def get_fixation_aware_atk(eps):    
+    atk_p = FixationAwareAPGDAttackParams()
+    atk_p.eps = eps
+    return atk_p
+
+def get_precomputed_fixation_apgd_atk(eps):
+    atk_p = get_apgd_atk(eps)
+    atk_p._cls = PrecomputedFixationAPGDAttack
+    return atk_p
+
+def get_precomputed_fixation_apgd_1s_atk(eps):
+    atk_p = get_apgd_1s_atk(eps)
+    atk_p._cls = PrecomputedFixationAPGDAttack
+    return atk_p
+
+def get_precomputed_fixation_apgd_5s_atk(eps):
+    atk_p = get_apgd_5s_atk(eps)
+    atk_p._cls = PrecomputedFixationAPGDAttack
+    return atk_p
+
+def get_precomputed_fixation_apgd_10s_atk(eps):
+    atk_p = get_apgd_10s_atk(eps)
+    atk_p._cls = PrecomputedFixationAPGDAttack
+    return atk_p
+
+def get_precomputed_fixation_apgd_25s_atk(eps):
+    atk_p = get_apgd_25s_atk(eps)
+    atk_p._cls = PrecomputedFixationAPGDAttack
+    return atk_p
+
+def get_precomputed_fixation_eot10_apgd_25s_atk(eps):
+    atk_p = get_apgd_25s_atk(eps)
+    atk_p._cls = PrecomputedFixationAPGDAttack
+    atk_p.eot_iter = 10
+    return atk_p
+
+def get_precomputed_fixation_apgd_50s_atk(eps):
+    atk_p = get_apgd_50s_atk(eps)
+    atk_p._cls = PrecomputedFixationAPGDAttack
+    return atk_p
+
+def get_precomputed_fixation_apgd_75s_atk(eps):
+    atk_p = get_apgd_75s_atk(eps)
+    atk_p._cls = PrecomputedFixationAPGDAttack
+    return atk_p
+
+def get_precomputed_fixation_apgd_l2_atk(eps):
+    atk_p = get_apgd_l2_atk(eps)
+    atk_p._cls = PrecomputedFixationAPGDAttack
+    return atk_p
+
+def get_precomputed_fixation_apgd_l2_25s_atk(eps):
+    atk_p = get_apgd_l2_25s_atk(eps)
+    atk_p._cls = PrecomputedFixationAPGDAttack
     return atk_p
 
 def get_adv_attack_params(atk_types):
@@ -284,7 +465,7 @@ def setup_for_five_fixation_evaluation(p: BaseParameters):
     return p
 
 def set_num_fixations(p: BaseParameters, n):
-    if n > 1:
+    if (n > 1) and not isinstance(p, MultiFixationTiedBackboneClassifier.ModelParams):
         if get_param(p, 'feature_ensembler_params') is None:
             ensembler_params = LogitAverageEnsembler.ModelParams(LogitAverageEnsembler, n=n)
             set_param(p, 'logit_ensembler_params', ensembler_params)
@@ -314,7 +495,35 @@ def setup_for_fixation_selection(p: BaseParameters):
     set_param2(p, IdentityLayer.get_params(), param_type=GaussianNoiseLayer.ModelParams)
     set_param2(p, [4, *(retinap.input_shape[1:])], param_name='input_size', set_all=True)        
     return p
-    
+
+def add_fixation_predictor_to_model(p, fixation_prediction_model_name, apply_retina_before_fixation=False):
+    model_name_split = fixation_prediction_model_name.split(':')
+    if model_name_split[0] == 'deepgazeII':
+        if len(model_name_split) == 0:
+            from adversarialML.biologically_inspired_models.src.fixation_prediction.models import DeepGazeII
+            fpm = DeepGazeII.get_params()
+        else:
+            raise NotImplementedError('custom configurations for deepgaze-II are not supported at this time.')
+    elif model_name_split[0] == 'deepgazeIII':
+        if len(model_name_split) == 0:
+            from adversarialML.biologically_inspired_models.src.fixation_prediction.models import DeepGazeIII
+            fpm = DeepGazeIII.get_params()
+        else:
+            from adversarialML.biologically_inspired_models.src.fixation_prediction.models import CustomBackboneDeepGazeIII
+            fpm = CustomBackboneDeepGazeIII.get_pretrained_model_params(model_name_split[1])
+    else:
+        raise NotImplementedError(f'Expected arch to be deepgazeII or deepgazeIII, but got {model_name_split[0]}')
+    retinap = get_param(p, param_type=AbstractRetinaFilter.ModelParams)
+    noisep = get_param(p, param_type=GaussianNoiseLayer.ModelParams, default=IdentityLayer.get_params())
+    retinafixp = RetinaFilterWithFixationPrediction.ModelParams(RetinaFilterWithFixationPrediction,
+                                                                    CommonModelParams([4, *(retinap.input_shape[1:])]), 
+                                                                    noisep, retinap, fixation_params=fpm,
+                                                                    target_downsample_factor=1,
+                                                                    loc_sampling_temp=1.,
+                                                                    apply_retina_before_fixation=apply_retina_before_fixation)
+    set_param2(p, retinafixp, param_type=AbstractRetinaFilter.ModelParams)
+    set_param2(p, IdentityLayer.get_params(), param_type=GaussianNoiseLayer.ModelParams)
+    return p    
 
 class MultiRandAffineAugments(torch.nn.Module):
     @define(slots=False)
@@ -364,7 +573,8 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                                 center_fixation=False, five_fixation_ensemble=False, hscan_fixation_ensemble=False, view_scale=None, disable_retina=False, 
                                 add_fixed_noise_patch=False, use_common_corruption_testset=False, disable_reconstruction=False, use_residual_img=False,
                                 fixate_in_bbox=False, enable_random_noise=False, apply_rand_affine_augments=False, num_affine_augments=5, fixate_on_max_loc=False,
-                                clickme_data=False, use_precomputed_fixations=False, num_fixations=1):
+                                clickme_data=False, use_precomputed_fixations=False, num_fixations=1, precompute_fixation_map=False, add_fixation_predictor=False,
+                                retina_after_fixation=False, fixation_prediction_model='deepgazeII', straight_through_retina=False):
     class AdversarialAttackBatteryEvalTask(task_cls):
         _cls = task_cls
         def __init__(self) -> None:
@@ -383,18 +593,22 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                 p.datafolder = f'{os.path.dirname(p.datafolder)}/eval_dataset_dir'
                 p.max_num_train = 10000
             if use_common_corruption_testset:
-                if p.dataset == SupportedDatasets.ECOSET10:
+                if p.dataset in [SupportedDatasets.ECOSET10, SupportedDatasets.ECOSET10_FOLDER]:
                     p.dataset = SupportedDatasets.ECOSET10C_FOLDER
-                    p.datafolder = os.path.join(os.path.dirname(os.path.dirname(p.datafolder)), 'distorted')
+                    # p.datafolder = os.path.join(os.path.dirname(os.path.dirname(p.datafolder)), 'distorted')
+                    p.datafolder = '/home/mshah1/workhorse3/ecoset-10/distorted'
                 if p.dataset == SupportedDatasets.ECOSET100_FOLDER:
                     p.dataset = SupportedDatasets.ECOSET100C_FOLDER
-                    p.datafolder = os.path.join(p.datafolder, 'distorted')
+                    # p.datafolder = os.path.join(p.datafolder, 'distorted')
+                    p.datafolder = '/home/mshah1/workhorse3/ecoset-100/distorted'
                 if p.dataset == SupportedDatasets.ECOSET_FOLDER:
                     p.dataset = SupportedDatasets.ECOSETC_FOLDER
-                    p.datafolder = '/home/mshah1/workhorse3/ecoset/distorted'
+                    p.datafolder = '/home/mshah1/workhorse3/ecoset/distorted/'
+                    # p.dataset = SupportedDatasets.ECOSETC
+                    # p.datafolder = '/home/mshah1/workhorse3/ecoset/distorted/shards'
                 if p.dataset == SupportedDatasets.IMAGENET_FOLDER:
-                    p.dataset = SupportedDatasets.ECOSETC_FOLDER
-                    p.datafolder = '/home/mshah1/workhorse3/ecoset/distorted'
+                    p.dataset = SupportedDatasets.IMAGENETC_FOLDER
+                    p.datafolder = '/home/mshah1/workhorse3/imagenet/distorted'
                 if p.dataset == SupportedDatasets.CIFAR10:
                     p.dataset = SupportedDatasets.CIFAR10C
                     p.datafolder = '/home/mshah1/workhorse3/cifar-10-batches-py/distorted'
@@ -414,6 +628,8 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
             p = super().get_model_params()
             if use_precomputed_fixations and (not fixate_on_max_loc):
                 p = setup_for_fixation_selection(p)
+            elif add_fixation_predictor:
+                p = add_fixation_predictor_to_model(p, fixation_prediction_model, apply_retina_before_fixation=(not retina_after_fixation))
             if enable_random_noise:
                 p = set_gaussian_noise_param(p, 'add_noise_during_inference', True)
                 p = set_layer_param(p, VOneBlock, 'add_noise_during_inference', True)
@@ -433,6 +649,7 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                 p = disable_retina_processing(p)
             else:
                 p = set_retina_param(p, 'view_scale', view_scale)
+                p = set_retina_param(p, 'straight_through', straight_through_retina)
                 if center_fixation:
                     p = set_retina_loc_mode(p, 'center')
                 elif five_fixation_ensemble:
@@ -458,7 +675,7 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                                SupportedDatasets.ECOSET100wFIXATIONMAPS_FOLDER]:
                 p.trainer_params.cls = PrecomputedFixationMapMultiAttackEvaluationTrainer
                 p.trainer_params.set_fixation_to_max = fixate_on_max_loc
-            elif self.has_fixation_prediction_network:
+            elif self.has_fixation_prediction_network and precompute_fixation_map:
                 p.trainer_params.cls = RetinaFilterWithFixationPredictionMultiAttackEvaluationTrainer
             else:
                 p.trainer_params.cls = MultiAttackEvaluationTrainer
@@ -468,12 +685,12 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
             atk_params = []
             for name, atkfn in atk_param_fns.items():
                 if apply_rand_affine_augments:
-                    name = f'{num_affine_augments}RandAug'
+                    name = f'{num_affine_augments}RandAug'+ name
                 if clickme_data:
                     name = 'ClickMeData'+name
                 if use_common_corruption_testset:
                     name = 'CC'+name
-                if use_precomputed_fixations:
+                if use_precomputed_fixations or precompute_fixation_map:
                     name = 'PrecomputedFmap'+name
                 if disable_reconstruction:
                     name = f'NoRecon'+name
@@ -481,6 +698,8 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                     name = 'ResidualImg'+name
                 if enable_random_noise:
                     name = 'RandNoise'+name
+                if add_fixation_predictor:
+                    name = f'{fixation_prediction_model}Fixations'+name
                 if disable_retina:
                     name = f'NoRetina'+name
                 else:
@@ -488,6 +707,8 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                         name = 'DetNoise'+name
                     if view_scale is not None:
                         name = f'Scale={view_scale}'+name
+                    if straight_through_retina:
+                        name = 'StraightThrough'+name
                     if center_fixation and isinstance(name, str):
                         name = 'Centered'+name
                     elif five_fixation_ensemble and isinstance(name, str):
@@ -498,7 +719,7 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
                         name = 'BBFixation'+name
                     elif fixate_on_max_loc:
                         name = 'Top1Fixation'+name
-                    else:
+                    elif use_precomputed_fixations or precompute_fixation_map or self.has_fixation_prediction_network:
                         name = f'Top{num_fixations}Fixation{"s" if num_fixations > 1 else ""}'+name
                 atk_params += [(name, atkfn(eps)) for eps in test_eps]
             adv_config.testing_attack_params = atk_params
@@ -506,7 +727,7 @@ def get_adversarial_battery_task(task_cls, num_test, batch_size, atk_param_fns, 
     return AdversarialAttackBatteryEvalTask
 
 def get_randomized_smoothing_task(task_cls, num_test, sigmas, batch_size, rs_batch_size:int = 1000, n0: int = 100, n: int = 100_000, alpha: float = 0.001,
-                                    center_fixation=False, five_fixation_ensemble=False, start_idx=0, end_idx=None):
+                                    center_fixation=False, five_fixation_ensemble=False, start_idx=0, end_idx=None, add_fixed_noise_patch=False,):
     class RandomizedSmoothingEvalTask(task_cls):
         def get_dataset_params(self):
             p = super().get_dataset_params()
@@ -520,6 +741,13 @@ def get_randomized_smoothing_task(task_cls, num_test, sigmas, batch_size, rs_bat
                 p = set_retina_loc_mode(p, 'center')
             elif five_fixation_ensemble:
                 p = setup_for_five_fixation_evaluation(p)
+            
+            if add_fixed_noise_patch:
+                p = set_gaussian_noise_param(p, 'add_deterministic_noise_during_inference', True)
+                p = set_layer_param(p, VOneBlock, 'add_deterministic_noise_during_inference', True)
+            else:
+                p = set_gaussian_noise_param(p, 'add_deterministic_noise_during_inference', False)
+                p = set_layer_param(p, VOneBlock, 'add_deterministic_noise_during_inference', False)
             return p
 
         def get_experiment_params(self) -> BaseExperimentConfig:
@@ -537,6 +765,8 @@ def get_randomized_smoothing_task(task_cls, num_test, sigmas, batch_size, rs_bat
             p.trainer_params.randomized_smoothing_params.start_idx = start_idx
             p.trainer_params.randomized_smoothing_params.end_idx = end_idx if end_idx is not None else num_test
             p.batch_size = num_test
+            if add_fixed_noise_patch:
+                p.trainer_params.exp_name = 'DetNoise'+p.trainer_params.exp_name
             if center_fixation:
                 p.trainer_params.exp_name = 'Centered-'+p.trainer_params.exp_name
             if five_fixation_ensemble:

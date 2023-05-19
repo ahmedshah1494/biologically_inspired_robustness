@@ -26,10 +26,17 @@ def get_task_class_from_str(s):
     return task_cls
 
 attacks =  {
-            'APGD': eval.get_apgd_atk, 
+            'APGD': eval.get_apgd_atk,
+            'APGD_75': eval.get_apgd_75s_atk,
+            'APGD_50': eval.get_apgd_50s_atk,
+            'APGD_25': eval.get_apgd_25s_atk,
+            'APGD_10': eval.get_apgd_10s_atk,
+            'APGD_5': eval.get_apgd_5s_atk,
+            'APGD_1': eval.get_apgd_1s_atk,
             'APGD_EOT20': eval.get_eot20_apgd_atk,
             'APGD_EOT50': eval.get_eot50_apgd_atk,
-            'APGDL2': eval.get_apgd_l2_atk, 
+            'APGDL2': eval.get_apgd_l2_atk,
+            'APGDL2_25': eval.get_apgd_l2_25s_atk,
             'APGDL2_EOT20': eval.get_eot20_apgd_l2_atk,
             'APGDL2_EOT50': eval.get_eot50_apgd_l2_atk,
             'APGDL1': eval.get_apgd_l1_atk,
@@ -46,41 +53,71 @@ attacks =  {
             'Square': eval.get_square_atk,
             'CWL2': eval.get_cwl2_atk,
             'PGD': eval.get_pgd_atk,
+            'PGD_25': eval.get_pgd_25s_atk,
+            'PGD_10': eval.get_pgd_10s_atk,
+            'PGD_5': eval.get_pgd_5s_atk,
+            'PGD_1': eval.get_pgd_1s_atk,
+            'FA-APGD': eval.get_fixation_aware_atk,
+            'PcFmap-APGD': eval.get_precomputed_fixation_apgd_atk,
+            'PcFmap-APGD_1': eval.get_precomputed_fixation_apgd_1s_atk,
+            'PcFmap-APGD_5': eval.get_precomputed_fixation_apgd_5s_atk,
+            'PcFmap-APGD_10': eval.get_precomputed_fixation_apgd_10s_atk,
+            'PcFmap-APGD_25': eval.get_precomputed_fixation_apgd_25s_atk,
+            'PcFmap-APGD_50': eval.get_precomputed_fixation_apgd_50s_atk,
+            'PcFmap-APGDL2_25': eval.get_precomputed_fixation_apgd_l2_25s_atk,
+            'PcFmap-APGD_25_EOT10': eval.get_precomputed_fixation_eot10_apgd_25s_atk,
+            'AutoAttackLinf': eval.get_autoattack_linf_atk,
         }
 
 if __name__ == '__main__':
     parser = ArgumentParser()
+    # Model args
     parser.add_argument('--task', type=str, required=True)
     parser.add_argument('--ckp', type=str)
+    # Data settings
     parser.add_argument('--num_test', type=int, default=2000)
     parser.add_argument('--batch_size', type=int, default=256)
+
+    parser.add_argument('--output_to_task_logdir', action='store_true')
     parser.add_argument('--num_trainings', type=int, default=1)
     parser.add_argument('--eval_only', action='store_true')
     parser.add_argument('--prune_and_test', action='store_true')
+    # Adversarial attack settings
     parser.add_argument('--run_adv_attack_battery', action='store_true')
     parser.add_argument('--attacks', nargs='+', type=str, choices=attacks.keys(), default=['APGD'])
-    parser.add_argument('--eps_list', nargs='+', type=float, default=[0., 0.008, 0.016, 0.024])
+    parser.add_argument('--eps_list', nargs='+', type=float, default=[0.])
+    # Randomized smoothing settings
     parser.add_argument('--run_randomized_smoothing_eval', action='store_true')
     parser.add_argument('--rs_start_batch_idx', type=int, default=0)
     parser.add_argument('--rs_end_batch_idx', type=int)
-    parser.add_argument('--output_to_task_logdir', action='store_true')
+    # Fixation Settings
     parser.add_argument('--center_fixation', action='store_true')
     parser.add_argument('--five_fixations', action='store_true')
     parser.add_argument('--bb_fixations', action='store_true')
     parser.add_argument('--fixate_on_max_loc', action='store_true')
+    parser.add_argument('--view_scale', type=int, default=None)
+    parser.add_argument('--hscan_fixations', action='store_true')
+    # Fixation model Settings
+    parser.add_argument('--add_fixation_predictor', action='store_true')
+    parser.add_argument('--fixation_prediction_model', type=str, default='deepgazeII')
+    parser.add_argument('--retina_after_fixation', action='store_true')
     parser.add_argument('--use_precomputed_fixations', action='store_true')
+    parser.add_argument('--precompute_fixation_map', action='store_true')
     parser.add_argument('--use_clickme_data', action='store_true')
     parser.add_argument('--num_fixations', type=int, default=1)
     parser.add_argument('--many_fixations', action='store_true')
-    parser.add_argument('--hscan_fixations', action='store_true')
+    
     parser.add_argument('--disable_retina', action='store_true')
+    parser.add_argument('--straight_through_retina', action='store_true')
     parser.add_argument('--disable_reconstruction', action='store_true')
     parser.add_argument('--use_residual_img', action='store_true')
+
     parser.add_argument('--use_common_corruption_testset', action='store_true')
+
     parser.add_argument('--add_fixed_noise_patch', action='store_true')
     parser.add_argument('--add_random_noise', action='store_true')
     parser.add_argument('--multi_randaugment', action='store_true')
-    parser.add_argument('--view_scale', type=int, default=None)
+
     parser.add_argument('--use_lightning_lite', action='store_true')
     parser.add_argument('--use_bf16_precision', action='store_true')
     parser.add_argument('--use_f16_precision', action='store_true')
@@ -118,7 +155,12 @@ if __name__ == '__main__':
                                                     fixate_on_max_loc=args.fixate_on_max_loc,
                                                     clickme_data=args.use_clickme_data,
                                                     use_precomputed_fixations=args.use_precomputed_fixations,
-                                                    num_fixations=args.num_fixations
+                                                    num_fixations=args.num_fixations,
+                                                    precompute_fixation_map=args.precompute_fixation_map,
+                                                    add_fixation_predictor=args.add_fixation_predictor,
+                                                    fixation_prediction_model=args.fixation_prediction_model,
+                                                    retina_after_fixation=args.retina_after_fixation,
+                                                    straight_through_retina=args.straight_through_retina,
                                                     )()
         runner_cls = AdversarialAttackBatteryRunner
         runner_kwargs = {
@@ -127,7 +169,8 @@ if __name__ == '__main__':
     elif args.run_randomized_smoothing_eval:
         task = eval.get_randomized_smoothing_task(task_cls, args.num_test, args.eps_list, args.batch_size, rs_batch_size=args.batch_size,
                                                     center_fixation=args.center_fixation, five_fixation_ensemble=args.five_fixations,
-                                                    start_idx=args.rs_start_batch_idx, end_idx=args.rs_end_batch_idx)()
+                                                    start_idx=args.rs_start_batch_idx, end_idx=args.rs_end_batch_idx,
+                                                    add_fixed_noise_patch=args.add_fixed_noise_patch)()
         runner_cls = RandomizedSmoothingRunner
         if args.use_lightning_lite:
             runner_kwargs = {
@@ -177,8 +220,8 @@ if __name__ == '__main__':
             runner_kwargs['lightning_kwargs']['resume_from_checkpoint'] = ckp_pth
         runner = runner_cls(task, num_trainings=args.num_trainings, ckp_pth=ckp_pth, load_model_from_ckp=(ckp_pth is not None), **runner_kwargs)
         if args.eval_only:
-            # with open(f'{os.path.dirname(os.path.dirname(ckp_pth))}/eval_cmd_{time()}.txt', 'w') as f:
-            #     f.write(str(args))
+            with open(f'{os.path.dirname(os.path.dirname(ckp_pth))}/eval_cmd_{time()}.txt', 'w') as f:
+                f.write(str(args))
             runner.create_trainer()
             runner.test()
         elif args.prune_and_test:
