@@ -1,6 +1,6 @@
 
 from collections import OrderedDict
-from typing import Callable, List, Union
+from typing import Callable, List, Literal, Union
 from attrs import define, field
 from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
@@ -409,6 +409,70 @@ class DeepGazeIII(BaseFixationPredictor):
         params.always_recompute_fmap = True
         super().__init__(params)
     
+    def _make_network(self):
+        self.fixation_predictor = deepgaze_pytorch.DeepGazeIII(self.params.pretrained)
+
+    def predict_fixation_map(self, image, centerbias):
+        b,c,h,w = image.shape
+
+        # get x and y from index
+        x_hist = self.hist % w
+        y_hist = self.hist // w
+        
+        fixation_map = self.fixation_predictor.forward(image, centerbias, x_hist, y_hist, None)
+        return fixation_map
+
+class DeepGazeIIIModule(deepgaze_pytorch.modules.DeepGazeIII):
+    def forward(self, x, centerbias, x_hist=None, y_hist=None, durations=None, return_features=False):
+        orig_shape = x.shape
+        x = nn.functional.interpolate(x, scale_factor=1 / self.downsample)
+        features = x = self.features(x)
+
+        readout_shape = [math.ceil(orig_shape[2] / self.downsample / self.readout_factor), math.ceil(orig_shape[3] / self.downsample / self.readout_factor)]
+        x = [nn.functional.interpolate(item, readout_shape) for item in x]
+
+        x = torch.cat(x, dim=1)
+        x = self.saliency_network(x)
+
+        if self.scanpath_network is not None:
+            scanpath_features = deepgaze_pytorch.modules.encode_scanpath_features(x_hist, y_hist, size=(orig_shape[2], orig_shape[3]), device=x.device)
+            #scanpath_features = F.interpolate(scanpath_features, scale_factor=1 / self.downsample / self.readout_factor)
+            scanpath_features = nn.functional.interpolate(scanpath_features, readout_shape)
+            y = self.scanpath_network(scanpath_features)
+        else:
+            y = None
+
+        x = self.fixation_selection_network((x, y))
+
+        x = self.finalizer(x, centerbias)
+        if return_features:
+            return x, features
+        return x
+
+class mFeatureExtractor(deepgaze_pytorch.modules.FeatureExtractor):
+    def __init__(self, features, targets):
+        super().__init__(features, targets)
+        self.input_cache = None
+        self.final_output = None
+
+    def forward(self, x, return_model_output=False):
+        if self.input_cache is not x:
+            self.input_cache = x
+            self.outputs.clear()
+            self.final_output = self.features(x)
+            # plt.figure()
+            # plt.imshow(convert_image_tensor_to_ndarray(x[0]))
+            # plt.title(f'{self.final_output[0].argmax(-1)}')
+        layer_outputs = [self.outputs[target] for target in self.targets]
+        if return_model_output:
+            return layer_outputs, self.final_output
+        return layer_outputs
+
+class CustomBackboneDeepGazeIII(BaseFixationPredictor):
+    @define(slots=False)
+    class ModelParams(BaseFixationPredictor.ModelParams):
+        ckp_path: str = None
+
     def build_saliency_network(self, input_channels):
         return nn.Sequential(OrderedDict([
             ('layernorm0', deepgaze_pytorch.layers.LayerNorm(input_channels)),
@@ -445,27 +509,46 @@ class DeepGazeIII(BaseFixationPredictor):
 
     def _make_network(self):
         if self.params.backbone_params is not None:
-            backbone = self.params.backbone_params.cls(self.params.backbone_params)
-            ckp_path = self.params.backbone_config['ckp_path']
-            backbone = load_params_into_model(torch.load(ckp_path), backbone)
-            self.fixation_predictor = deepgaze_pytorch.modules.DeepGazeII(
-                features=deepgaze_pytorch.modules.FeatureExtractor(backbone, [
-                        '1.classifier.resnet.6.1',
-                        '1.classifier.resnet.7.0',
-                        '1.classifier.resnet.7.1',
-                    ]
-                ),
-                saliency_network=self.build_saliency_network(2560),
-                scanpath_network=None,
-                fixation_selection_network=self.build_fixation_selection_network(scanpath_features=0),
-                downsample=1.5,
-                readout_factor=4,
-                saliency_map_factor=4,
-                included_fixations=[],
-            )
-        else:
-            self.fixation_predictor = deepgaze_pytorch.DeepGazeIII(self.params.pretrained)
+            class ToFloatImage(nn.Module):
+                def forward(self, x):
+                    x = x.float()
+                    if x.max() > 1:
+                        x = x / 255
+                    sf = 224 / min(x.shape[2:])
+                    # scale and resize image and center bias to match training regime
+                    if sf != 1:
+                        x = torch.nn.functional.interpolate(x, scale_factor=sf)
+                    return x
 
+            backbone = self.params.backbone_params.cls(self.params.backbone_params)
+            backbone = nn.Sequential(
+                ToFloatImage(),
+                backbone
+            )
+            # ckp_path = self.params.backbone_config['ckp_path']
+            # backbone = load_params_into_model(torch.load(ckp_path), backbone)
+            feature_extractor = mFeatureExtractor(
+                    backbone, self.params.backbone_config['feature_layers']
+                )
+
+        x = torch.rand(1,3,224,224)
+        feats = feature_extractor(x)
+        featdim = sum([f.shape[1] for f in feats])
+        self.fixation_predictor = DeepGazeIIIModule(
+            features=feature_extractor,
+            saliency_network=self.build_saliency_network(featdim),
+            scanpath_network=None,
+            fixation_selection_network=self.build_fixation_selection_network(scanpath_features=0),
+            downsample=1,
+            readout_factor=4,
+            saliency_map_factor=4,
+            included_fixations=[],
+        )
+
+        if self.params.ckp_path is not None:
+            ckp = {'state_dict': torch.load(self.params.ckp_path)}
+            self.fixation_predictor = load_params_into_model(ckp,  self.fixation_predictor)
+    
     def predict_fixation_map(self, image, centerbias):
         b,c,h,w = image.shape
 
@@ -473,8 +556,112 @@ class DeepGazeIII(BaseFixationPredictor):
         x_hist = self.hist % w
         y_hist = self.hist // w
         
-        fixation_map = self.fixation_predictor.forward(image, centerbias, x_hist, y_hist, None)
+        fixation_map = self.fixation_predictor.forward(image, centerbias, None, None, None)
+        fixation_map = fixation_map.unsqueeze(1)
         return fixation_map
+
+    @classmethod
+    def get_pretrained_model_params(cls, cfgstr):
+        def set_param2(p:BaseParameters, value, param_name=None, param_type=None, default=None, set_all=False):
+            # print(p)
+            if (param_name is not None) and hasattr(p, param_name):
+                setattr(p, param_name, value)
+                if not set_all:
+                    return True
+
+            param_set = False
+            if hasattr(p, 'asdict'):
+                d = p.asdict(recurse=False)
+                for k,v in d.items():            
+                    if np.iterable(v):
+                        for i,x in enumerate(v):
+                            if isinstance(x, BaseParameters):
+                                if (param_type is not None) and isinstance(x, param_type):
+                                    v[i] = value
+                                    param_set = p
+                                else:
+                                    param_set = set_param2(x, value, param_name, param_type, default, set_all)
+                                if param_set and (not set_all):
+                                    return param_set
+                    else:
+                        if (param_type is not None) and isinstance(v, param_type):
+                            setattr(p, k, value)
+                            param_set = True
+                        else:
+                            param_set = set_param2(v, value, param_name, param_type, default, set_all)
+                        if param_set and (not set_all):
+                            return param_set
+            return param_set
+        
+        from adversarialML.biologically_inspired_models.src.ICLR22.noisy_retina_blur import ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18
+        from adversarialML.biologically_inspired_models.src.models import IdentityLayer
+        from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter, GaussianNoiseLayer
+
+        rblur_in1k_params = ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18().get_model_params()
+        set_param2(rblur_in1k_params, IdentityLayer.get_params(), param_type=AbstractRetinaFilter.ModelParams)
+        set_param2(rblur_in1k_params, IdentityLayer.get_params(), param_type=GaussianNoiseLayer.ModelParams)
+        cfgdict = {
+            'rblur-6.1-7.0-7.1-in1k':{
+                                        'bbparams': rblur_in1k_params,
+                                        'feature_layers':[
+                                                            '1.classifier.resnet.6.1',
+                                                            '1.classifier.resnet.7.0',
+                                                            '1.classifier.resnet.7.1',
+                                                        ],
+                                        'ckp_path':'/home/mshah1/workhorse3/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/pretraining/final.pth',
+                                        # 'ckp_path':'/ocean/projects/cis220031p/mshah1/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/pretraining/final.pth',
+                                        'min_img_dim':224
+                                    },
+            'rwarp-6.1-7.0-7.1-in1k':{
+                                        'bbparams': rblur_in1k_params,
+                                        'feature_layers':[
+                                                            '1.classifier.resnet.6.1',
+                                                            '1.classifier.resnet.7.0',
+                                                            '1.classifier.resnet.7.1',
+                                                        ],
+                                        'ckp_path':'/home/mshah1/workhorse3/train_deepgaze3/ImagenetRetinaWarpCyclicLRRandAugmentXResNet2x18/pretraining/step-0051.pth',
+                                        'min_img_dim':224
+                                    },
+            'rblur-6.1-7.0-7.1-clickme-in1k':{
+                                        'bbparams': rblur_in1k_params,
+                                        'feature_layers':[
+                                                            '1.classifier.resnet.6.1',
+                                                            '1.classifier.resnet.7.0',
+                                                            '1.classifier.resnet.7.1',
+                                                        ],
+                                        'ckp_path':'/home/mshah1/workhorse3/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/clickme/step-0002.pth',
+                                        'min_img_dim':224
+                                    },
+            'rblur-4.1-6.1-7.0-7.1-in1k':{
+                                        'bbparams': rblur_in1k_params,
+                                        'feature_layers':[
+                                                            '1.classifier.resnet.4.1',
+                                                            '1.classifier.resnet.6.1',
+                                                            '1.classifier.resnet.7.0',
+                                                            '1.classifier.resnet.7.1',
+                                                        ],
+                                        'ckp_path':'/home/mshah1/workhorse3/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/layers_4_6_7/pretraining/final.pth',
+                                        'min_img_dim':224
+                                    },
+            'rblur-3-4.1-5.1-7.0-7.1-in1k':{
+                                        'bbparams': rblur_in1k_params,
+                                        'feature_layers':[
+                                                            '1.classifier.resnet.3',
+                                                            '1.classifier.resnet.4.1',
+                                                            '1.classifier.resnet.5.1',
+                                                            '1.classifier.resnet.7.0',
+                                                            '1.classifier.resnet.7.1',
+                                                        ],
+                                        'ckp_path':'/home/mshah1/workhorse3/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/layers_3_4_5_7/pretraining/final.pth',
+                                        'min_img_dim':224
+                                    },
+        }
+        cfg = cfgdict[cfgstr]
+        p = cls.ModelParams(cls, cfg['bbparams'], 
+                            {'feature_layers':cfg['feature_layers']},
+                            ckp_path=cfg['ckp_path'],
+                            min_image_dim=cfg['min_img_dim'])
+        return p
 
 class DeepGazeIIE(BaseFixationPredictor):
     def __init__(self, params: BaseFixationPredictor.ModelParams) -> None:
@@ -845,8 +1032,10 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
         self.params = params
         self._make_network()
         self.ckp_loaded = False
-        self.loc_offset = np.array(self.retina.input_shape[1:])//2
+        if isinstance(self.retina, RBlur2):
+            self.loc_offset = np.array(self.retina.input_shape[1:])//2
         self.interim_outputs = {}
+        self.precomputed_fixation_map = None
     
     def _make_network(self):
         if self.params.preprocessing_params is not None:
@@ -855,10 +1044,13 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
             self.preprocessor = nn.Identity()
         self.retina = self.params.retina_params.cls(self.params.retina_params)
         self.retina.loc_mode = self.retina.params.loc_mode = 'const'
-        if isinstance(self.params.fixation_params, BaseFixationPredictor.ModelParams):
-            s = self.retina._get_view_scale()
-            w = 2*self.retina.clr_isobox_w[::-1][s] / self.params.target_downsample_factor
-            frac = w / max(self.retina.input_shape[1:])
+        if hasattr(self.params.fixation_params, 'fixation_width_frac'):
+            if hasattr(self.retina, '_get_view_scale'):
+                s = self.retina._get_view_scale()
+                w = 2*self.retina.clr_isobox_w[::-1][s] / self.params.target_downsample_factor
+                frac = w / max(self.retina.input_shape[1:])
+            else:
+                frac = 0.5
             self.params.fixation_params.fixation_width_frac = frac
         self.fixation_model = self.params.fixation_params.cls(self.params.fixation_params)
         if self.params.freeze_fixation_model:
@@ -872,6 +1064,12 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
             print('fixation model loaded!')
             self.fixation_model = self.fixation_model.eval()
             self.ckp_loaded = True
+    
+    def set_precomputed_fixation_map(self, fmaps):
+        self.precomputed_fixation_map = fmaps
+    
+    def unset_precomputed_fixation_map(self):
+        self.precomputed_fixation_map = None
     
     def preprocess(self, x):
         x = self.preprocessor(x)
@@ -973,23 +1171,24 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
             downsample_factor = self.params.target_downsample_factor
             if downsample_factor > 1:
                 fmaps = nn.functional.avg_pool2d(fmaps, downsample_factor, stride=downsample_factor)
-            w = fmaps.shape[3] # assumes that fmaps is square
-            flat_fmaps = torch.flatten(fmaps, 1)
-            loc_importance_maps = torch.log_softmax(flat_fmaps, 1)
-            # if self.training:
-            #     loc_idxs = torch.topk(
-            #                 gumbel_softmax(flat_fmaps, tau=self.params.loc_sampling_temp, dim=1, log=True)
-            #             , self.params.num_train_fixation_points, 1)[1]
-            # else:
-            #     loc_idxs = torch.topk(loc_importance_maps, self.params.num_eval_fixation_points, 1)[1]
-            # self.interim_outputs['loc_importance_maps'] = loc_importance_maps
-            # self.interim_outputs['selected_loc_idxs'] = loc_idxs
-            # rows = (loc_idxs // w).detach().cpu()
-            # cols = (loc_idxs % w).detach().cpu()
+            w = fmaps.shape[-1] # assumes that fmaps is square
             K = self.params.num_train_fixation_points if self.training else self.params.num_eval_fixation_points
-            rows, cols, loc_idxs = self.get_topk_fixations(fmaps, K)
-            self.interim_outputs['loc_importance_maps'] = loc_importance_maps
-            self.interim_outputs['selected_loc_idxs'] = loc_idxs
+            
+            if (fmaps.dim() == 4):
+                if fmaps.shape[1] == 1:
+                    flat_fmaps = torch.flatten(fmaps, 1)
+                    rows, cols, loc_idxs = self.get_topk_fixations(fmaps, K)
+                else:
+                    flat_fmaps = torch.flatten(fmaps, 2)
+                    loc_idxs = torch.argmax(flat_fmaps, -1)
+                    rows = loc_idxs // w
+                    cols = loc_idxs % w
+                loc_importance_maps = torch.log_softmax(flat_fmaps, -1)
+                self.interim_outputs['loc_importance_maps'] = loc_importance_maps
+                self.interim_outputs['selected_loc_idxs'] = loc_idxs
+            else:
+                ValueError(f'fixation maps must be 4D (batch x #fixations x height x width), but got {fmaps.dim()} tensor of shape {fmaps.shape}')
+            
             if downsample_factor > 1:
                 rows = rows * downsample_factor + downsample_factor//2
                 cols = cols * downsample_factor + downsample_factor//2
@@ -1095,6 +1294,7 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
         # plt.subplot(2, K+1, K+2)
         # plt.imshow(convert_image_tensor_to_ndarray(x_out[0].mean(0)))
         x_out = x_out.reshape(-1, *(x_out.shape[2:]))
+        fmaps = torch.cat(fmaps, 1)
         return x_out, fmaps
         #     print(fidx_ds, frow, fcol, fidx, fidx//fmap.shape[3], fidx%fmap.shape[3])
 
@@ -1115,9 +1315,13 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
         if not self.ckp_loaded:
             self._maybe_load_ckp()
         self.retina.loc_mode = self.retina.params.loc_mode = 'const'
-        if self.params.salience_map_provided_as_input_channel:
-            fixation_maps = x[:, [-1]]
-            x = x[:, :-1]
+        if self.params.salience_map_provided_as_input_channel or (self.precomputed_fixation_map is not None):
+            if self.params.salience_map_provided_as_input_channel:
+                fixation_maps = x[:, 3:]
+                # print('in fixation predictor', torch.norm(torch.flatten(fixation_maps,1), dim=1))
+                x = x[:, :3]
+            elif self.precomputed_fixation_map is not None:
+                fixation_maps = self.precomputed_fixation_map
             x = self.preprocess(x)
             locs = self.get_loc_from_fmaps(fixation_maps)
             n_locs_per_img = locs.shape[1]
@@ -1224,6 +1428,125 @@ class RetinaFilterWithFixationPrediction(AbstractModel):
             return logits, loss
         else:
             return loss
+
+class MultiFixationTiedBackboneClassifier(RetinaFilterWithFixationPrediction):
+    @define(slots=False)
+    class ModelParams(RetinaFilterWithFixationPrediction.ModelParams):
+        ensembling_mode: Literal['logit_mean', 'prob_sum'] = 'logit_mean'
+        return_fixated_images: bool = False
+
+    def get_fixations_from_model(self, x):
+        x = self.preprocess(x)
+        K = self.params.num_train_fixation_points if self.training else self.params.num_eval_fixation_points
+        fxidxs = [torch.zeros(x.shape[0], dtype=x.dtype, device=x.device)]
+        fxrows = [torch.zeros(x.shape[0], dtype=x.dtype, device=x.device)]
+        fxcols = [torch.zeros(x.shape[0], dtype=x.dtype, device=x.device)]
+        fmaps = []
+        x_out = torch.zeros_like(x).unsqueeze(1).repeat_interleave(K, 1)
+        all_logits = []
+
+        for k in range(K+1):
+            if (k > 0):
+                fmap = self.fixation_model(x_out[:, k-1], fidx)
+            else:
+                if self.params.apply_retina_before_fixation:
+                    if isinstance(self.retina, RBlur2):
+                        # self.retina.params.loc = tuple(self.loc_offset - np.array(x.shape[2:])//2)
+                        self.retina.params.loc = (self.loc_offset, self.loc_offset)
+                    else:
+                        # self.retina.params.loc = tuple(np.array(x.shape[2:])//2)
+                        self.retina.params.loc = (0,0)
+                    x_blurred = self.retina(x)
+                else:
+                    x_blurred = x
+                fmap = self.fixation_model(x_blurred)
+            
+            if isinstance(self.fixation_model, CustomBackboneDeepGazeIII) and isinstance(self.fixation_model.fixation_predictor.features, mFeatureExtractor):
+                logits = self.fixation_model.fixation_predictor.features.final_output
+                # logits = self.fixation_model.fixation_predictor.features(x_out[:, k-1], return_model_output=True)[1]
+            else:
+                raise NotImplementedError('fixation_model must be CustomBackboneDeepGazeIII')
+            if k > 0:
+                all_logits.append(logits)
+            if k == K:
+                break
+
+            fmaps.append(fmap)
+
+            fmap_ds = self._maybe_downsample_fmap(fmap)
+            downsample_factor = self.params.target_downsample_factor
+            
+            if hasattr(self.fixation_model, 'sample_fixation'):
+                fidx_ds = self.fixation_model.sample_fixation(fmap_ds)
+            else:
+                if self.training:
+                    masked_flat_prob_map = gumbel_softmax(torch.flatten(fmap_ds, 1), tau=self.params.loc_sampling_temp, hard=True)
+                else:
+                    soft_masked_flat_prob_map = torch.softmax(torch.flatten(fmap_ds, 1), 1)
+                    index = masked_flat_prob_map.max(1, keepdim=True)[1]
+                    hard_masked_flat_prob_map = torch.zeros_like(masked_flat_prob_map, memory_format=torch.legacy_contiguous_format).scatter_(1, index, 1.0)
+                    masked_flat_prob_map = hard_masked_flat_prob_map - soft_masked_flat_prob_map.detach() + soft_masked_flat_prob_map
+
+                index_tensor = torch.arange(masked_flat_prob_map.shape[1], dtype=masked_flat_prob_map.dtype, device=masked_flat_prob_map.device).unsqueeze(1)
+                fidx_ds = masked_flat_prob_map.mm(index_tensor).squeeze(-1).int()
+            
+            if self.training:
+                rand_fidx = torch.randint_like(fidx_ds, torch.flatten(fmap_ds, 1).shape[1])
+                rand_idx = (torch.rand(fidx_ds.shape[0]) < self.params.random_fixation_prob)
+                fidx_ds[rand_idx] = rand_fidx[rand_idx]
+
+            frow = (fidx_ds // fmap_ds.shape[3]) * downsample_factor + downsample_factor//2
+            fcol = (fidx_ds % fmap_ds.shape[3]) * downsample_factor + downsample_factor//2
+            fidx = frow * fmap.shape[3] + fcol
+
+            fxidxs.append(fidx)
+            fxcols.append(fcol)
+            fxrows.append(frow)
+
+            locs = fidx.cpu().detach().numpy()
+            loc_set = set(fidx.cpu().detach().numpy().tolist())
+            x_out_ = x_out[:, k]
+            for loc in loc_set:
+                r = loc // fmap.shape[3]
+                c = loc % fmap.shape[3]
+                # print(loc, (locs == loc))
+                x_ = x[(locs == loc)]
+                self.retina.params.loc = (r,c)
+                x_ = self.retina(x_)
+                x_out_[(locs == loc)] = x_
+            x_out[:, k] = x_out_
+        x_out = x_out.reshape(-1, *(x_out.shape[2:]))
+        fmaps = torch.cat(fmaps, 1)
+        all_logits = torch.stack(all_logits, 1)
+        if self.params.ensembling_mode == 'logit_mean':
+            all_logits = all_logits.mean(1)
+        if self.params.ensembling_mode == 'prob_sum':
+            all_logits = torch.log_softmax(all_logits, -1).logsumexp(1)
+        return x_out, fmaps, all_logits
+    
+    def forward(self, x, return_fixation_maps=False):
+        if self.params.disable:
+            return x
+        if not self.ckp_loaded:
+            self._maybe_load_ckp()
+        self.retina.loc_mode = self.retina.params.loc_mode = 'const'
+        x_out, fixation_maps, logits = self.get_fixations_from_model(x)
+        output = (logits,)
+        if self.params.return_fixated_images:
+            output = output + (x_out,)
+        if self.params.return_fixation_maps or return_fixation_maps:
+            output = output + (fixation_maps,)
+        if len(output) == 1:
+            output = output[0]
+        return output
+    
+    def compute_loss(self, x, y, return_logits=True, **kwargs):
+        logits = self.forward(x)
+        loss = nn.functional.cross_entropy(logits, y)
+        output = (loss,)
+        if return_logits:
+            output = (logits,) + output
+        return output
 
 class TiedBackboneRetinaFixationPreditionClassifier(AbstractModel):
     @define(slots=False)
