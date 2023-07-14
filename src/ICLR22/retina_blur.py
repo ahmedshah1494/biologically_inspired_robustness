@@ -644,8 +644,9 @@ class EcosetRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18(AbstractTask):
         return p
 
     def get_model_params(self):
-        rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=128, cone_std=0.12,
-                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform')
+        rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
+                                                use_1d_gkernels=True)
         resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 565), num_classes=565,
                                             normalization_layer_params=NormalizationLayer.get_params(),
                                             widen_factor=self.widen_factor)
