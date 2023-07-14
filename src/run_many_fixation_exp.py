@@ -5,6 +5,7 @@ import numpy as np
 from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
 from adversarialML.biologically_inspired_models.src.utils import load_pickle, load_json, write_json
 from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter
+from adversarialML.biologically_inspired_models.src.evaluation_tasks import set_retina_param
 from mllib.datasets.dataset_factory import SupportedDatasets
 from matplotlib import pyplot as plt
 from mllib.param import BaseParameters
@@ -45,6 +46,7 @@ parser.add_argument('--ckp', type=str, required=True)
 parser.add_argument('--eps', type=float, default=0.)
 parser.add_argument('--num_test', type=int, default=np.inf)
 parser.add_argument('--N', type=int, default=49)
+parser.add_argument('--worst_case', action='store_true')
 parser.add_argument('--plot_examples', action='store_true')
 parser.add_argument('--num_examples', type=int, default=9)
 
@@ -63,7 +65,7 @@ for m in model.modules():
     if isinstance(m, AbstractRetinaFilter):
         rblur = m
         break
-rblur.view_scale = None
+rblur.view_scale = 3
 x = torch.rand(1, *imsize, requires_grad=True)
 
 vf_rad = 800
@@ -73,8 +75,8 @@ locs = list(product(col_locs, row_locs))
 # locs = [(111,111)]
 
 ds_params = task.get_dataset_params()
-ds_params.dataset = SupportedDatasets.ECOSET10_FOLDER
-ds_params.datafolder = os.path.dirname(os.path.dirname(ds_params.datafolder))
+# ds_params.dataset = SupportedDatasets.ECOSET10_FOLDER
+# ds_params.datafolder = os.path.dirname(os.path.dirname(ds_params.datafolder))
 # ds_params.dataset = SupportedDatasets.ECOSET100_FOLDER
 # ds_params.datafolder = f'{os.path.dirname(ds_params.datafolder)}/eval_dataset_dir'
 ds_params.max_num_test = args.num_test
@@ -98,11 +100,15 @@ if not args.plot_examples:
         total += x.shape[0]
         lmap = np.zeros((x.shape[0], nclasses, x.shape[2], x.shape[3]))
         c = np.zeros((x.shape[0],), dtype=bool)
-        for l in locs:
-            if not c.all():
+        for i, l in enumerate(locs):
+            if (not c.all()) or i==0:
                 if not args.plot_examples:
-                    x_ = x[~c]
-                    y_ = y[~c]
+                    if (args.worst_case) and (i>0):
+                        x_ = x[c]
+                        y_ = y[c]
+                    else:
+                        x_ = x[~c]
+                        y_ = y[~c]
                 else:
                     x_ = x
                     y_ = y
@@ -111,12 +117,15 @@ if not args.plot_examples:
                 # set_param(model.params, 'loc', (vf_rad - l[0], vf_rad - l[1]))
                 set_param(model.params, 'loc', (l[0], l[1]))
                 if args.eps > 0:
-                    x_ = APGD(model, eps=args.eps)(x_, y_)
+                    x_ = APGD(model, eps=args.eps, steps=25)(x_, y_)
                 logits = model(x_).detach().cpu()
                 yp = torch.argmax(logits,1)
                 # print(y.shape, y_.shape, yp.shape, c.astype(int).sum())
                 c_ = (y_ == yp).numpy()
-                c[~c] |= c_
+                if (i == 0) or (not args.worst_case):
+                    c[~c] |= c_
+                else:
+                    c[c] &= c_
                 if args.plot_examples:
                     lmap[..., l[0], l[1]] = logits.numpy()
                 print(l, x_.shape, y_.shape, c.astype(int).sum())
@@ -133,7 +142,7 @@ if not args.plot_examples:
         results = load_json(ofn)
     else:
         results = {}
-    results[f'accuracy_eps={args.eps}_N={args.N}'] = accuracy
+    results[f'{"worstcase-" if args.worst_case else ""}accuracy_eps={args.eps}_N={args.N}'] = accuracy
     write_json(results, ofn)
 
 if args.plot_examples:
