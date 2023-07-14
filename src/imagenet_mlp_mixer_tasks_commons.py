@@ -37,7 +37,7 @@ from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
 from mllib.adversarial.attacks import TorchAttackAPGDInfParams
 
-from task_utils import *
+from adversarialML.biologically_inspired_models.src.task_utils import *
 
 _EPS_LIST = [0.0, 0.008, 0.016, 0.024, 0.032, 0.048, 0.064]
 _NEPOCHS = 300
