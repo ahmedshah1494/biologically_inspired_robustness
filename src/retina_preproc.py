@@ -753,6 +753,31 @@ class RetinaWarp(AbstractRetinaFilter):
         # plt.close()
         return warped
 
+def gfb_to_single_opponent_gfb(gfb):
+    from itertools import combinations
+    W = gfb.weight.clone()
+    nzchan = (W != 0).any(-1).any(-1)
+    nzW = W[nzchan]
+
+    _excitatory = torch.relu(nzW)
+    _inhibitory = torch.relu(-nzW)
+    newW = torch.zeros_like(W).unsqueeze(1).repeat_interleave(3, 1)
+    for j, (exC, inC) in enumerate(combinations(range(3), 2)):
+        newW[:, j, exC] = _excitatory
+        newW[:, j, inC] = -_inhibitory
+    newW = newW.flatten(0, 1)
+    gfb.weight = nn.Parameter(newW, requires_grad=False)
+    return gfb
+
+
+def voneblock_to_single_opponent_voneblock(voneblock):
+    voneblock.simple_conv_q0 = gfb_to_single_opponent_gfb(voneblock.simple_conv_q0)
+    voneblock.simple_conv_q1 = gfb_to_single_opponent_gfb(voneblock.simple_conv_q1)
+    voneblock.simple_channels *= 3
+    voneblock.complex_channels *= 3
+    voneblock.out_channels *= 3
+    return voneblock
+
 class VOneBlock(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
@@ -775,17 +800,22 @@ class VOneBlock(AbstractModel):
         dropout_p: float = 0.
         add_noise_during_inference: bool = False
         add_deterministic_noise_during_inference: bool = False
+        color_mode: Literal['random_color', 'exhaustive_single_opponent'] = 'random_color'
 
     
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
         self.params = params
-        kwargs_to_exclude = set(['cls', 'add_noise_during_inference', 'add_deterministic_noise_during_inference', 'dropout_p'])
+        kwargs_to_exclude = set(['cls', 'add_noise_during_inference', 'add_deterministic_noise_during_inference', 'dropout_p', 'color_mode'])
         kwargs = params.asdict(filter=lambda a,v: a.name not in kwargs_to_exclude)
         print(kwargs)
         from adversarialML.biologically_inspired_models.vonenet.vonenet.vonenet import VOneNet
         voneblock = VOneNet(**kwargs)
-        bottleneck = nn.Conv2d(params.simple_channels+params.complex_channels, 64, kernel_size=1, stride=1, bias=False)
+        num_vone_channels = params.simple_channels+params.complex_channels
+        if params.color_mode == 'exhaustive_single_opponent':
+            voneblock = voneblock_to_single_opponent_voneblock(voneblock)
+            num_vone_channels *= 3
+        bottleneck = nn.Conv2d(num_vone_channels, 64, kernel_size=1, stride=1, bias=False)
         self.voneblock = nn.Sequential(
             voneblock,
             bottleneck
@@ -818,5 +848,3 @@ class VOneBlock(AbstractModel):
             return logits, loss
         else:
             return loss
-
-        
