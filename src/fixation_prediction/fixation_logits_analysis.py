@@ -23,9 +23,9 @@ import matplotlib.pyplot as plt
 #     lambda x: np.load(x)['fixation_logits'], extensions='npz'
 # )
 ds = FixationPointDataset(
-    '/share/workhorse3/mshah1/ecoset-10',
-    'val',
-    '/share/workhorse3/mshah1/biologically_inspired_models/iclr22_logs/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18/0/fixation_logits/49',
+    # '/share/workhorse3/mshah1/ecoset-10',
+    # 'val',
+    # '/share/workhorse3/mshah1/biologically_inspired_models/iclr22_logs/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18/0/fixation_logits/49',
     # '/share/workhorse3/mshah1/biologically_inspired_models/iclr22_logs/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18/0/fixation_logits/0.004/16/',
     # '/share/workhorse3/mshah1/ecoset-100/',
     # 'val',
@@ -33,12 +33,16 @@ ds = FixationPointDataset(
     # '/share/workhorse3/mshah1/ecoset/',
     # 'val',
     # '/share/workhorse3/mshah1/biologically_inspired_models/iclr22_logs/ecoset-0.0/EcosetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/0/fixation_logits/49/',
+    '/share/workhorse3/mshah1/imagenet',
+    'val',
+    '/share/workhorse3/mshah1/biologically_inspired_models/iclr22_logs/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/1/fixation_outputs/49',
     transform=torchvision.transforms.Compose([torchvision.transforms.Resize(224),
                 torchvision.transforms.CenterCrop(224),
                 torchvision.transforms.ToTensor()]), fixation_target='logit'
 )
 print(len(ds[0]))
 imgs, flogits, Y = zip(*(list(ds))) #zip(*([ds[i] for i in np.random.choice(len(ds), 10, replace=False)]))
+print(flogits[0].shape)
 flogits = np.stack(flogits, 0)
 imgs = np.stack(imgs, 0)
 Y = np.array(Y)
