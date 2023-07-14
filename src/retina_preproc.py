@@ -754,6 +754,16 @@ class RetinaWarp(AbstractRetinaFilter):
         return warped
 
 def gfb_to_single_opponent_gfb(gfb):
+    '''
+    Converts a Gabor filter bank (as intialized by code from https://github.com/dicarlolab/vonenet/blob/master/vonenet/modules.py)
+    to a single-opponent color sensitive filterbank. A single-opponent filter is such that it is excited by one color and inhibited
+    by another, whereas in the original filterbank the filters are excited by the presence and inhibited by the absense of one color.
+    The conversion is done by replicating each filter in the original filter bank thrice, once for each pair of R, G and B color 
+    combinations.
+
+    Inputs:
+     - gfb: vonenet.modules.GFB
+    '''
     from itertools import combinations
     W = gfb.weight.clone()
     nzchan = (W != 0).any(-1).any(-1)
@@ -771,6 +781,9 @@ def gfb_to_single_opponent_gfb(gfb):
 
 
 def voneblock_to_single_opponent_voneblock(voneblock):
+    '''
+    Replace the gabor filterbank in an instance of vonenets by a single-opponent GFB.
+    '''
     voneblock.simple_conv_q0 = gfb_to_single_opponent_gfb(voneblock.simple_conv_q0)
     voneblock.simple_conv_q1 = gfb_to_single_opponent_gfb(voneblock.simple_conv_q1)
     voneblock.simple_channels *= 3
