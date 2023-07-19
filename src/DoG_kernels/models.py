@@ -90,7 +90,9 @@ class _DoGFilterbank(nn.Module):
                  application_mode:Literal['greyscale', 
                                     'random_channel',
                                     'all_channels',
-                                    'single_opponent']='random_channel') -> None:
+                                    'single_opponent',
+                                    'all_channels_replicated']='random_channel',
+                 kernel_path:str=None) -> None:
         '''
         Creates a filterbank of oriented Difference (or Laplacian) of Gaussian filters. The DoG filter
         is computed as $$\phi(M;0,\sigma_x,\sigma_y, \\rho)-\phi(M;0,ratio*\sigma_x, ratio*\sigma_y, \\rho)$$,
@@ -146,9 +148,17 @@ class _DoGFilterbank(nn.Module):
         self.min_std = min_std
         self.max_corr = max_corr
         self.application_mode = application_mode
+        self.kernel_path = kernel_path
 
         self._initialize()
+
     def _initialize(self):
+        self.preprocess = NormalizationLayer() if self.normalize_input else nn.Identity()
+        if self.kernel_path is not None:
+            self.kernels = torch.load(self.kernel_path, map_location=torch.device('cpu'))
+            self.kernels = nn.parameter.Parameter(self.kernels, requires_grad=False)
+            return
+
         base_stds = torch.stack(
             [torch.FloatTensor([self.base_std]*self.num_shapes),
             torch.linspace(self.min_std, self.base_std, self.num_shapes)],
@@ -162,7 +172,6 @@ class _DoGFilterbank(nn.Module):
         self.stds = stds[stdsi_x_corrsi[:,0]]
         self.corrs = corrs[stdsi_x_corrsi[:,1]]
 
-        self.preprocess = NormalizationLayer() if self.normalize_input else nn.Identity()
         self.kernels = eliptical_dogkerns(self.kernel_size, self.stds, self.corrs, ratio=self.ratio).unsqueeze(1)
         
         self._setup_application_mode()
@@ -176,11 +185,17 @@ class _DoGFilterbank(nn.Module):
             )
         else:
             if self.application_mode == 'random_channel':
-                active_channels = torch.randint(0, self.in_channels, (self.kernels.shape[0],))
+                # active_channels = torch.randint(0, self.in_channels, (self.kernels.shape[0],))
+                active_channels = torch.multinomial(torch.FloatTensor([0.64, 0.32, 0.02]), self.kernels.shape[0], replacement=True)
                 new_kernels = torch.zeros_like(self.kernels).repeat_interleave(self.in_channels, 1)
                 new_kernels[torch.arange(0, new_kernels.shape[0]), active_channels] = self.kernels[:,0]
             if self.application_mode == 'all_channels':
                 new_kernels = self.kernels.repeat_interleave(self.in_channels, 1)
+            if self.application_mode == 'all_channels_replicated':
+                new_kernels = torch.zeros(self.kernels.shape[0], self.in_channels, self.in_channels, self.kernels.shape[-2], self.kernels.shape[-1])
+                for j in range(self.in_channels):
+                    new_kernels[:, j, [j]] = self.kernels
+                new_kernels = torch.flatten(new_kernels, 0, 1)
             if self.application_mode == 'single_opponent':
                 from itertools import combinations            
                 _excitatory = torch.relu(self.kernels)
@@ -221,6 +236,7 @@ class DoGFilterbank(AbstractModel):
                         'random_channel',
                         'all_channels',
                         'single_opponent']='random_channel'
+        kernel_path:str=None
 
     def __init__(self, params: BaseParameters) -> None:
         super().__init__(params)
