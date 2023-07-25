@@ -5,42 +5,7 @@ import numpy as np
 from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
 from attrs import define
-
-def bivariate_gaussian_kernels(M, stds, corrxy):
-    '''
-    Create N bivariate Gaussian PDF over [(-M/2,-M/2), (M,M)] with std.
-    Inputs:
-        M (int): kernel size (height = width assumed)
-        stds (Tensor): Nx2 tensor containing x and y standard deviation values for N kernels
-        corrxy (Tensor): N element tensor containing correlation values of N kernels
-    '''
-    N = stds.shape[0]
-
-    x = torch.arange(-(M//2), M//2+1, 1)
-    xy = torch.stack(torch.meshgrid(x, x), -1) # M x M x 2
-    xy = xy.unsqueeze(0).repeat_interleave(stds.shape[0], 0).to(stds.device) # N x M x M x 2
-    stds = stds.view(N, 1, 1, 2)
-    z = xy / stds
-
-    corrxy = corrxy.view(N, 1, 1)
-    #   N x M x M          N x M x M
-    w = torch.exp(- ((z ** 2).sum(-1) - 2*torch.prod(z, -1)*corrxy) / (2*(1-corrxy**2+1e-8)))
-    w = w / (2*np.pi*torch.prod(stds,-1)*torch.sqrt(1 - corrxy**2)+1e-8)
-    return w
-
-def eliptical_dogkerns(ksz, stds, corrs, ratio=np.sqrt(2)):
-    '''
-    Creates N eleplical Difference of Gaussian filters by calling bivariate_gaussian_kernels.
-    Inputs:
-        stds (Tensor): Nx2 tensor containing x and y standard deviation values for N kernels
-        corrs (Tensor): N element tensor containing correlation values of N kernels
-        ratio (float): The ratio of the std of the negative Gaussian to the std of the positive Gaussian
-
-    '''
-    gk1 = bivariate_gaussian_kernels(ksz, stds, corrs)
-    gk2 = bivariate_gaussian_kernels(ksz, stds*ratio, corrs)
-    dogk = gk1-gk2
-    return dogk
+from adversarialML.biologically_inspired_models.src.bio_receptive_fields.utils import eliptical_dogkerns
 
 class NormalizationLayer(nn.Module):
     def __init__(self, mean: Union[float, List[float]] = [0.485, 0.456, 0.406],
@@ -69,6 +34,42 @@ class GreyscaleLayer(nn.Module):
 
     def forward(self, x):
         return (x * self.channel_wt).sum(1, keepdim=True)
+
+class RandomFilterbank(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        kernel_size:int=None
+        in_channels:int = None
+        out_channels:int = None
+        stride:int = 1
+        padding:int = 0
+        dilation:int = 1
+        activation: Callable = nn.ReLU
+        normalize_input: bool = True
+    
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.params = params
+        kwargs_to_exclude = set(['cls', 'activation', 'normalize_input'])
+        kwargs = self.params.asdict(filter=lambda a,v: a.name not in kwargs_to_exclude)
+        self.conv = nn.Conv2d(**kwargs).requires_grad_(False)
+        self.preprocess = NormalizationLayer() if self.params.normalize_input else nn.Identity()
+        self.activation = params.activation()
+    
+    def forward(self, x):
+        x = self.preprocess(x)
+        x = self.conv(x)
+        x = self.activation(x)
+        return x
+    
+    def compute_loss(self, x, y, return_logits=True):
+        out = self.forward(x)
+        logits = out
+        loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
 
 class _DoGFilterbank(nn.Module):
     def __init__(self, 
@@ -173,9 +174,9 @@ class _DoGFilterbank(nn.Module):
         self.corrs = corrs[stdsi_x_corrsi[:,1]]
 
         self.kernels = eliptical_dogkerns(self.kernel_size, self.stds, self.corrs, ratio=self.ratio).unsqueeze(1)
-        
-        self._setup_application_mode()
+        self.channel_weights = nn.parameter.Parameter(torch.ones(1, self.in_channels, 1, 1), requires_grad=False)        
         self.kernels = nn.parameter.Parameter(self.kernels, requires_grad=False)
+        self._setup_application_mode()
     
     def _setup_application_mode(self):
         if self.application_mode == 'greyscale':
@@ -191,6 +192,10 @@ class _DoGFilterbank(nn.Module):
                 new_kernels[torch.arange(0, new_kernels.shape[0]), active_channels] = self.kernels[:,0]
             if self.application_mode == 'all_channels':
                 new_kernels = self.kernels.repeat_interleave(self.in_channels, 1)
+            if self.application_mode == 'all_channels_learnable':
+                new_kernels = self.kernels.repeat_interleave(self.in_channels, 1)
+                nn.init.uniform_(self.channel_weights.data, -np.sqrt(6/32), -np.sqrt(6/32))
+                self.channel_weights.requires_grad_(True)
             if self.application_mode == 'all_channels_replicated':
                 new_kernels = torch.zeros(self.kernels.shape[0], self.in_channels, self.in_channels, self.kernels.shape[-2], self.kernels.shape[-1])
                 for j in range(self.in_channels):
@@ -206,11 +211,18 @@ class _DoGFilterbank(nn.Module):
                     new_kernels[:, j, [exC]] = _excitatory
                     new_kernels[:, j, [inC]] = -_inhibitory
                 new_kernels = torch.flatten(new_kernels, 0, 1)
-            self.kernels = new_kernels
+            self.kernels.data = new_kernels
+    
+    def get_num_kernels(self):
+        return self.kernels.shape[0]
+
+    def get_kernel_stds(self):
+        return self.stds
 
     def forward(self, x):
         x = self.preprocess(x)
-        x = nn.functional.conv2d(x, self.kernels, stride=self.stride, padding=self.padding, dilation=self.dilation)
+        K = self.kernels * self.channel_weights
+        x = nn.functional.conv2d(x, K, stride=self.stride, padding=self.padding, dilation=self.dilation)
         x = self.activation(x)
         return x
 
