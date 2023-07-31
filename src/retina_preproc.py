@@ -201,7 +201,6 @@ class GaussianNoiseLayer(AbstractModel):
         add_noise_during_inference: bool = False
         add_deterministic_noise_during_inference: bool = False
         max_input_size: List[int] = [3, 224, 224]
-        neuronal_noise: bool = False
 
     def __init__(self, params) -> None:
         super().__init__(params)
@@ -212,7 +211,7 @@ class GaussianNoiseLayer(AbstractModel):
                                  )
     
     def __repr__(self):
-        return f"GaussianNoiseLayer(std={self.std}, neuronal={self.params.neuronal_noise})"
+        return f"GaussianNoiseLayer(std={self.std}"
     
     def forward(self, img):
         if self.training or self.params.add_noise_during_inference:
@@ -225,9 +224,64 @@ class GaussianNoiseLayer(AbstractModel):
                 # print(d.min(), d.mean(), d.median(), d.max(), d.sum(), d.abs().sum())
             else:
                 d = 0
-        if self.params.neuronal_noise:
-            d = d * torch.sqrt(torch.relu(img.clone()) + 1e-5)
         return img + d
+
+    def compute_loss(self, x, y, return_logits=True, **kwargs):
+        out = self.forward(x)
+        logits = out
+        loss = torch.zeros((x.shape[0],), dtype=x.dtype, device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+class NeuronalGaussianNoiseLayer(GaussianNoiseLayer):
+    @define(slots=False)
+    class ModelParams(GaussianNoiseLayer.ModelParams):
+        mean: float = 0
+
+    def __init__(self, params) -> None:
+        super().__init__(params)
+        self.std = self.params.std
+        self.mean = self.params.mean
+        if self.params.add_deterministic_noise_during_inference:
+            self.register_buffer('noise_patch', 
+                                 torch.empty(1,*(params.max_input_size)).normal_(0, 1., generator=torch.Generator().manual_seed(51972691))
+                                 )
+    
+    def __repr__(self):
+        return f"NeuronalGaussianNoiseLayer(std={self.std}, mean={self.mean})"
+    
+    def forward(self, img):
+        if self.training or self.params.add_noise_during_inference:
+            d = torch.empty_like(img).normal_(0, 1.)
+        else:
+            if self.params.add_deterministic_noise_during_inference:
+                b, c, h ,w = img.shape
+                # d = self.noise_patch[:c, :h, :w].unsqueeze(0)
+                d = self.noise_patch
+                # print(d.min(), d.mean(), d.median(), d.max(), d.sum(), d.abs().sum())
+            else:
+                d = 0
+        eps = 10e-5
+        x = img.clone()
+        # print(x.flatten()[:5])
+        x *= self.std
+        # print(x.flatten()[:5])
+        x += self.mean
+        # print(x.flatten()[:5])
+        x += d * torch.sqrt(torch.relu(x.clone()) + eps)
+        # print(x.flatten()[:5])
+        x -= self.mean
+        # print(x.flatten()[:5])
+        x /= self.std
+        # print(x.flatten()[:5])
+        noise = x - img
+        print('noise_norm =', torch.norm(torch.flatten(noise, 1), dim=-1).mean())
+        print('noise_mean =', noise.mean())
+        print('noise_std =', noise.std())
+        x = torch.relu(x)
+        return x
 
     def compute_loss(self, x, y, return_logits=True, **kwargs):
         out = self.forward(x)
