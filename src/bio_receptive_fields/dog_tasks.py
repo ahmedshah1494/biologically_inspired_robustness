@@ -1,8 +1,10 @@
 import numpy as np
 import torchvision
 from adversarialML.biologically_inspired_models.src.models import (
-    CommonModelParams, GeneralClassifier, SequentialLayers, XResNet18, ConvEncoder, ConvParams, IdentityLayer)
+    CommonModelParams, GeneralClassifier, SequentialLayers, XResNet18, ConvEncoder, ConvParams, IdentityLayer, ActivationLayer)
 from adversarialML.biologically_inspired_models.src.bio_receptive_fields.dog_filterbank import DoGFilterbank, LearnableDoGFilterbank, RandomFilterbank
+from adversarialML.biologically_inspired_models.src.bio_receptive_fields.bionorm import BioNorm, BioNormWrapper
+from adversarialML.biologically_inspired_models.src.retina_preproc import NeuronalGaussianNoiseLayer, GaussianNoiseLayer
 from adversarialML.biologically_inspired_models.src.task_utils import *
 from adversarialML.biologically_inspired_models.src.trainers import \
     LightningAdversarialTrainer
@@ -81,6 +83,167 @@ class Ecoset10RandColorDoGFBx2CyclicLRRandAugmentXResNet2x18(Ecoset10RandColorDo
             SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
             OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=375, pct_start=0.1, anneal_strategy='linear'),
             logdir=LOGDIR, batch_size=32
+        )
+
+class Ecoset10NoisyRandColorDoGFBx2CyclicLRRandAugmentXResNet2x18(AbstractTask):
+    imgs_size = 224
+    input_size = [3, imgs_size, imgs_size]
+    widen_factor = 2
+    noise_std = 0.25
+    def get_dataset_params(self) :
+        p = get_ecoset10_params(train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        return p
+    
+    def get_model_params(self):
+        gnoisep1 = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, .35,
+                                                         add_deterministic_noise_during_inference=True,
+                                                         max_input_size=[512,112,112])
+        gnoisep2 = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, .35,
+                                                         add_deterministic_noise_during_inference=True,
+                                                         max_input_size=[2048,56,56])
+        relup = ActivationLayer.ModelParams(ActivationLayer, nn.ReLU)
+        dogfbp1 = DoGFilterbank.ModelParams(DoGFilterbank, 11, stride=2, padding=5, num_scales=4, scaling_factor=np.sqrt(2),
+                                            activation=nn.Identity)
+        convp1 = ConvEncoder.ModelParams(ConvEncoder,
+                                        CommonModelParams([512, self.imgs_size, self.imgs_size], num_units=[32]),
+                                        ConvParams([1], [1], [0]))
+        dogfbp2 = DoGFilterbank.ModelParams(DoGFilterbank, 7, in_channels=32, stride=2, padding=3, num_scales=2, num_shapes=4, num_orientations=4,
+                                            application_mode='all_channels_replicated', normalize_input=False, activation=nn.Identity)
+        convp2 = ConvEncoder.ModelParams(ConvEncoder,
+                                        CommonModelParams([2048, self.imgs_size, self.imgs_size], num_units=[64]),
+                                        ConvParams([1], [1], [0]))
+        dogfbp = SequentialLayers.ModelParams(SequentialLayers, [dogfbp1, gnoisep1, relup, convp1, dogfbp2, gnoisep2, relup, convp2], CommonModelParams(self.input_size, activation=nn.Identity))
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams([64, self.imgs_size, self.imgs_size], 100), num_classes=100,
+                                            widen_factor=self.widen_factor, stem_sizes=(64,64,64), drop_layers=[0,3])
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, dogfbp, resnet_p)
+        return p
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=375, pct_start=0.1, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=32
+        )
+
+class Ecoset10AdvTrainRandColorDoGFBx2CyclicLRRandAugmentXResNet2x18(Ecoset10RandColorDoGFBx1CyclicLRRandAugmentXResNet2x18):
+    def get_model_params(self):
+        dogfbp1 = DoGFilterbank.ModelParams(DoGFilterbank, 11, stride=2, padding=5, num_scales=4, scaling_factor=np.sqrt(2))
+        convp1 = ConvEncoder.ModelParams(ConvEncoder,
+                                        CommonModelParams([512, self.imgs_size, self.imgs_size], num_units=[32]),
+                                        ConvParams([1], [1], [0]))
+        dogfbp2 = DoGFilterbank.ModelParams(DoGFilterbank, 7, in_channels=32, stride=2, padding=3, num_scales=2, num_shapes=4, num_orientations=4,
+                                            application_mode='all_channels_replicated', normalize_input=False)
+        convp2 = ConvEncoder.ModelParams(ConvEncoder,
+                                        CommonModelParams([2048, self.imgs_size, self.imgs_size], num_units=[64]),
+                                        ConvParams([1], [1], [0]))
+        dogfbp = SequentialLayers.ModelParams(SequentialLayers, [dogfbp1, convp1, dogfbp2, convp2], CommonModelParams(self.input_size, activation=nn.Identity))
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams([64, self.imgs_size, self.imgs_size], 100), num_classes=100,
+                                            widen_factor=self.widen_factor, stem_sizes=(64,64,64), drop_layers=[0,3])
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, dogfbp, resnet_p)
+        return p
+    
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                ),
+                AdversarialParams(training_attack_params=get_pgd_inf_params([0.008], 5, 0.008 / 4)[0])
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=375, pct_start=0.1, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=32
+        )
+
+class Ecoset10RandColorDoGFBx2BioNormCyclicLRRandAugmentXResNet2x18(AbstractTask):
+    imgs_size = 224
+    input_size = [3, imgs_size, imgs_size]
+    widen_factor = 2
+    noise_std = 0.25
+    def get_dataset_params(self) :
+        p = get_ecoset10folder_params(train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        return p
+
+    def get_model_params(self):
+        relup = ActivationLayer.ModelParams(ActivationLayer, nn.ReLU)
+        bnp1 = BioNorm.ModelParams(BioNorm, 512, 5)
+        bnp2 = BioNorm.ModelParams(BioNorm, 32, 5)
+        bnp3 = BioNorm.ModelParams(BioNorm, 2048, 5)
+        bnp4 = BioNorm.ModelParams(BioNorm, 64, 5)
+
+        dogfbp1 = DoGFilterbank.ModelParams(DoGFilterbank, 11, stride=2, padding=5, num_scales=4,
+                                            scaling_factor=np.sqrt(2), normalize_input=True,
+                                            activation=nn.ReLU)
+        convp1 = ConvEncoder.ModelParams(ConvEncoder,
+                                        CommonModelParams([512, self.imgs_size//2, self.imgs_size//2],
+                                                          num_units=[32], activation=nn.ReLU),
+                                        ConvParams([1], [1], [0]))
+        dogfbp2 = DoGFilterbank.ModelParams(DoGFilterbank, 7, in_channels=32, stride=2, padding=3,
+                                            num_scales=2, num_shapes=4, num_orientations=4,
+                                            application_mode='all_channels_replicated',
+                                            normalize_input=False, activation=nn.ReLU)
+        convp2 = ConvEncoder.ModelParams(ConvEncoder,
+                                        CommonModelParams([2048, self.imgs_size//4, self.imgs_size//4],
+                                                          num_units=[64], activation=nn.ReLU),
+                                        ConvParams([1], [1], [0]))
+        dogfbp = SequentialLayers.ModelParams(SequentialLayers, [
+                                                                    dogfbp1,
+                                                                    bnp1,
+                                                                    relup,
+                                                                    convp1,
+                                                                    bnp2,
+                                                                    relup,
+                                                                    dogfbp2,
+                                                                    bnp3,
+                                                                    relup,
+                                                                    convp2,
+                                                                    bnp4,
+                                                                    relup,
+                                                                ],
+                                              CommonModelParams(self.input_size, activation=nn.Identity))
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams([64, self.imgs_size, self.imgs_size], 10),
+                                         num_classes=10, widen_factor=self.widen_factor, stem_sizes=(64,64,64),
+                                         drop_layers=[0,3])
+        resnet_p = BioNormWrapper.ModelParams(BioNormWrapper, resnet_p, BioNorm.ModelParams(BioNorm, kernel_size=5))
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, dogfbp, resnet_p)
+        return p
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 60
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+               TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            OneCycleLRConfig(max_lr=0.075, epochs=nepochs, steps_per_epoch=375*2, pct_start=0.1, anneal_strategy='linear'),
+            logdir=LOGDIR, batch_size=16
         )
 
 class Ecoset10RandConvx1CyclicLRRandAugmentXResNet2x18(AbstractTask):
