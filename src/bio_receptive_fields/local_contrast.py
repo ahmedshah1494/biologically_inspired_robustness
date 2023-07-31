@@ -7,7 +7,7 @@ from mllib.param import BaseParameters
 from attrs import define
 
 class _LocalContrast(nn.Module):
-    def __init__(self, kernel_size, in_channels, stride=1, eps=1e-5) -> None:
+    def __init__(self, kernel_size, in_channels, stride=1, eps=1e-2) -> None:
         super().__init__()
         self.kernel_size = kernel_size
         self.in_channels = in_channels
@@ -28,7 +28,11 @@ class _LocalContrast(nn.Module):
         mean = nn.functional.conv2d(xpad, self.kernel, stride=self.stride, groups=self.in_channels)
         if self.stride > 1:
             x = nn.functional.interpolate(x, scale_factor=1/self.stride)
-        x = x / (self.eps+mean) - 1
+        x = (x - mean) / (self.eps+mean)
+        if not torch.isfinite(x).all():
+            print(x.min(), x.max())
+            print(mean.min(), mean.max())
+            exit()
         return x
 
 class LocalContrast(AbstractModel):
