@@ -52,7 +52,7 @@ class _BioNorm(nn.Module):
     
     def extra_repr(self):
         return (
-            "{num_features}, kernel_size={kernel_size}".format(**self.__dict__)
+            "num_features={num_features}, kernel_size={kernel_size}, affine={affine}, centered={center}".format(**self.__dict__)
         )
 
     def reset_parameters(self) -> None:
@@ -83,6 +83,7 @@ class _BioNorm(nn.Module):
             w = self.weight.view(1,-1,1,1)
             b = self.bias.view(1,-1,1,1)
             xnorm = w * xnorm + b
+        # print(xnorm.min(), xnorm.max())
         if (not torch.isfinite(xnorm).all()):
             print(xnorm.min(), xnorm.max())
             print(num.min(), num.max())
@@ -127,11 +128,13 @@ class BioNormWrapper(AbstractModel):
     @define(slots=False)
     class ModelParams(BaseParameters):
         wrapped_class_params: BaseParameters = None
-        kernel_size:int = None
+        bionorm_params: BioNorm.ModelParams = None
     
     def __init__(self, params: ModelParams) -> None:
         super().__init__(params)
         self.wrapped_class = params.wrapped_class_params.cls(params.wrapped_class_params)
+        kwargs_to_exclude = set(['cls', 'num_features'])
+        self.bionorm_kwargs = params.bionorm_params.asdict(filter=lambda a,v: a.name not in kwargs_to_exclude)
         self._replace_batchnorm_with_bionorm()
     
     def _replace_batchnorm_with_bionorm(self):
@@ -146,9 +149,10 @@ class BioNormWrapper(AbstractModel):
                         module = getattr(module, name)
                 else:
                     try:
-                        module[int(name)] = _BioNorm(module[int(name)].num_features, self.params.kernel_size)
+                        module[int(name)] = _BioNorm(module[int(name)].num_features, **(self.bionorm_kwargs))
                     except:
-                        module = setattr(module, name, _BioNorm(getattr(module,name).num_features, self.params.kernel_size))
+                        module = setattr(module, name, _BioNorm(getattr(module,name).num_features, **(self.bionorm_kwargs)))
+
 
     def forward(self, *args, **kwargs):
         return self.wrapped_class(*args, **kwargs)
