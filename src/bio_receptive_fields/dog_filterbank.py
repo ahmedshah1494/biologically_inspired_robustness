@@ -194,7 +194,7 @@ class _DoGFilterbank(nn.Module):
                 new_kernels = self.kernels.repeat_interleave(self.in_channels, 1)
             if self.application_mode == 'all_channels_learnable':
                 new_kernels = self.kernels.repeat_interleave(self.in_channels, 1)
-                nn.init.uniform_(self.channel_weights.data, -np.sqrt(6/32), -np.sqrt(6/32))
+                nn.init.uniform_(self.channel_weights.data, -np.sqrt(6/self.in_channels), -np.sqrt(6/self.in_channels))
                 self.channel_weights.requires_grad_(True)
             if self.application_mode == 'all_channels_replicated':
                 new_kernels = torch.zeros(self.kernels.shape[0], self.in_channels, self.in_channels, self.kernels.shape[-2], self.kernels.shape[-1])
