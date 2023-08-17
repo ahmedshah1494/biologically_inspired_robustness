@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-def bivariate_gaussian_kernels(M, stds, corrxy):
+def bivariate_gaussian_kernels(M, stds, corrxy, means=None):
     '''
     Create N bivariate Gaussian PDF over [(-M/2,-M/2), (M,M)] with std.
     Inputs:
@@ -15,6 +15,9 @@ def bivariate_gaussian_kernels(M, stds, corrxy):
     xy = torch.stack(torch.meshgrid(x, x), -1) # M x M x 2
     xy = xy.unsqueeze(0).repeat_interleave(stds.shape[0], 0).to(stds.device) # N x M x M x 2
     stds = stds.view(N, 1, 1, 2)
+    if means is not None:
+        means = means.view(N, 1, 1, 2)
+        xy = xy - means
     z = xy / stds
 
     corrxy = corrxy.view(N, 1, 1)
