@@ -13,7 +13,7 @@ from attrs import define, field
 from mllib.trainers.base_trainers import Trainer as _Trainer
 from mllib.trainers.base_trainers import PytorchLightningTrainer
 from mllib.trainers.base_trainers import MixedPrecisionTrainerMixin
-from mllib.trainers.pl_trainer import PytorchLightningLiteTrainerMixin, LightningLiteParams
+# from mllib.trainers.pl_trainer import PytorchLightningLiteTrainerMixin, LightningLiteParams
 from mllib.runners.configs import TrainingParams
 from mllib.utils.metric_utils import compute_accuracy, get_preds_from_logits
 from mllib.param import BaseParameters
@@ -222,10 +222,10 @@ class AdversarialTrainer(_Trainer, PruningMixin):
                 elif not iterable(v):
                     self.logger.add_scalar(k, v, global_step=step)
 
-class PytorchLightningAdversarialTrainer(PytorchLightningLiteTrainerMixin, AdversarialTrainer):
-    @define(slots=False)
-    class TrainerParams(AdversarialTrainer.TrainerParams):
-        lightning_lite_params: Type[LightningLiteParams] = field(factory=LightningLiteParams)
+# class PytorchLightningAdversarialTrainer(PytorchLightningLiteTrainerMixin, AdversarialTrainer):
+#     @define(slots=False)
+#     class TrainerParams(AdversarialTrainer.TrainerParams):
+#         lightning_lite_params: Type[LightningLiteParams] = field(factory=LightningLiteParams)
 
 class MixedPrecisionAdversarialTrainer(MixedPrecisionTrainerMixin, AdversarialTrainer):
     pass
@@ -398,7 +398,7 @@ class MultiAttackEvaluationTrainer(AdversarialTrainer):
             elif isinstance(atk, FoolboxAttackWrapper):
                 eps = atk.run_kwargs.get('epsilons', [float('inf')])[0]
             elif isinstance(atk, AutoAttackkWrapper):
-                eps = atk.attack.eps
+                eps = atk.attack.epsilon
             # elif isinstance(atk, torchattacks.attack.Attack):
             elif hasattr(atk, 'eps'):
                 eps = atk.eps
