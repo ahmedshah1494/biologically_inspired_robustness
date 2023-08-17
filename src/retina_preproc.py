@@ -276,10 +276,10 @@ class NeuronalGaussianNoiseLayer(GaussianNoiseLayer):
         # print(x.flatten()[:5])
         x /= self.std
         # print(x.flatten()[:5])
-        noise = x - img
-        print('noise_norm =', torch.norm(torch.flatten(noise, 1), dim=-1).mean())
-        print('noise_mean =', noise.mean())
-        print('noise_std =', noise.std())
+        # noise = x - img
+        # print('noise_norm =', torch.norm(torch.flatten(noise, 1), dim=-1).mean())
+        # print('noise_mean =', noise.mean())
+        # print('noise_std =', noise.std())
         x = torch.relu(x)
         return x
 
