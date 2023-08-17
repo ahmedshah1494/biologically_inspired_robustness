@@ -8,3 +8,5 @@ MNIST/*
 *.xlsx
 *ipynb
 *.npz
+*.npy
+*.pt
