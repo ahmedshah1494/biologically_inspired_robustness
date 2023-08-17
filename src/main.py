@@ -67,6 +67,8 @@ attacks =  {
             'PcFmap-APGDL2_25': eval.get_precomputed_fixation_apgd_l2_25s_atk,
             'PcFmap-APGD_25_EOT10': eval.get_precomputed_fixation_eot10_apgd_25s_atk,
             'AutoAttackLinf': eval.get_autoattack_linf_atk,
+            'AutoAttackL2': eval.get_autoattack_l2_atk,
+            'TAAutoAttackLinf': eval.get_torchattack_autoattack_linf_atk,
         }
 
 if __name__ == '__main__':

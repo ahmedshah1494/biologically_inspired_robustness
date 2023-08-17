@@ -183,6 +183,18 @@ def get_apgd_l1_atk(eps):
     return atk_p
 
 def get_autoattack_linf_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.AUTOATTACK, SupportedBackend.AUTOATTACK)
+    atk_p.norm = 'Linf'
+    atk_p.eps = eps
+    return atk_p
+
+def get_autoattack_l2_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.AUTOATTACK, SupportedBackend.AUTOATTACK)
+    atk_p.norm = 'L2'
+    atk_p.eps = eps
+    return atk_p
+
+def get_torchattack_autoattack_linf_atk(eps):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.AUTOATTACK, SupportedBackend.TORCHATTACKS)
     atk_p.norm = 'Linf'
     atk_p.eps = eps
