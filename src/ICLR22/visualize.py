@@ -1573,13 +1573,13 @@ def plot_ecoset10_new_rblur_pgdinf_results():
     plt.savefig(os.path.join(outdir, 'test_acc_bar_new_rblur_linf.png'))
     plt.close()
 
-def _plot_baseline_pgd_results(df, plot_config, norm='∞', stacked=False, min_eps=0., max_eps=1., legend=False):
+def _plot_baseline_pgd_results(df, plot_config, norm='∞', stacked=False, min_eps=0., max_eps=1., legend=False, figsize=(8,4)):
     xlabel = f'Perturbation Distance ‖ϵ‖{norm}'
     ylabel = 'Accuracy'
     sns.set_style("whitegrid")
     colors = sns.utils.get_color_cycle()[:len(plot_config)]
     methods = list(plot_config.keys())
-    plt.figure(figsize=(8,4))
+    plt.figure(figsize=figsize)
     with sns.plotting_context("paper", font_scale=2.7, rc={'lines.linewidth': 2.}):
         if stacked:
             for method, c in zip(methods[::-1], colors[::-1]):
@@ -1598,6 +1598,7 @@ def _plot_baseline_pgd_results(df, plot_config, norm='∞', stacked=False, min_e
     if not legend:
         plt.legend([],[], frameon=False)
     plt.tight_layout()
+    return ax
 
 def plot_cifar10_baseline_pgdinf_results(stacked=False, min_eps=0., max_eps=1., legend=False):
     plot_config = OrderedDict([
@@ -2725,7 +2726,151 @@ def plot_imagenet_apgd_nfixations_results():
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_nfix.pdf'), bbox_inches='tight')
     plt.close()
 
-plot_imagenet_apgd_nfixations_results()
+def plot_imagenet_autoattack_pgdinf_results(stacked=False, min_eps=0., max_eps=1., legend=False):
+    xlabel = 'Perturbation Distance ‖ϵ‖∞'
+
+    plot_config = OrderedDict([
+        ('APGD', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationScale=3DetNoiseAPGD'])),
+        ('AutoAttack', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationScale=3DetNoiseAutoAttackLinf'])),
+    ])
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+    ax = _plot_baseline_pgd_results(df, plot_config, norm='∞', stacked=stacked, min_eps=min_eps, max_eps=max_eps, legend=legend, figsize=(6,4))
+    ax.get_legend().set_title(None)
+    plt.savefig(os.path.join(outdir, f'test_acc_bar_autoattack_linf{"_stacked" if stacked else ""}.pdf'), format='pdf')
+    plt.close()
+
+def plot_imagenet_autoattack_pgdl2_results(stacked=False, min_eps=0., max_eps=1., legend=False):
+    xlabel = 'Perturbation Distance ‖ϵ‖2'
+
+    plot_config = OrderedDict([
+        ('APGD', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationScale=3DetNoiseAPGDL2','5FixationScale=3DetNoiseAPGD'])),
+        ('AutoAttack', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['5FixationScale=3DetNoiseAutoAttackL2','5FixationScale=3DetNoiseAutoAttackLinf'])),
+    ])
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+    print(df)
+    ax = _plot_baseline_pgd_results(df, plot_config, norm='2', stacked=stacked, min_eps=min_eps, max_eps=max_eps, legend=legend, figsize=(6,4))
+    ax.get_legend().set_title(None)
+    plt.savefig(os.path.join(outdir, f'test_acc_bar_autoattack_l2{"_stacked" if stacked else ""}.pdf'), format='pdf')
+    plt.close()
+
+def plot_imagenet_gaussian_baseline_pgdinf_results(stacked=False, min_eps=0., max_eps=1., legend=False):
+    xlabel = 'Perturbation Distance ‖ϵ‖∞'
+
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ('5-RandAffine', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['5RandAug', '5RandAugAPGD'])),
+        ('G-Blur($\sigma=10.5$)', (f'{log_root}/imagenet_folder-0.0/ImagenetGaussianBlurCyclicLRRandAugmentXResNet2x18', ['APGD_25'])),
+        ('G-Noise($\sigma=0.125$)', (f'{log_root}/imagenet_folder-0.0/ImagenetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['DetNoiseAPGD_25'])),
+        ('R-Blur', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsPrecomputedFmapPcFmap-APGD_25'])),
+        ('AT', (f'{log_root}//imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+    ])
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+    _plot_baseline_pgd_results(df, plot_config, norm='∞', stacked=stacked, min_eps=min_eps, max_eps=max_eps, legend=legend)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.45, 1.23), ncol=3)
+    plt.savefig(os.path.join(outdir, f'test_acc_bar_gaussian_baseline_linf{"_stacked" if stacked else ""}.pdf'), format='pdf')
+    plt.close()
+
+def plot_imagenet_gaussian_baseline_pgdl2_results(stacked=False, min_eps=0., max_eps=1., legend=False):
+    xlabel = 'Perturbation Distance ‖ϵ‖2'
+
+    plot_config = OrderedDict([
+        ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
+        ('5-RandAffine', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['5RandAug', '5RandAugAPGDL2'])),
+        ('G-Blur($\sigma=10.5$)', (f'{log_root}/imagenet_folder-0.0/ImagenetGaussianBlurCyclicLRRandAugmentXResNet2x18', ['APGD_25','APGDL2_25',])),
+        ('G-Noise($\sigma=0.125$)', (f'{log_root}/imagenet_folder-0.0/ImagenetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['DetNoiseAPGD_25','DetNoiseAPGDL2_25',])),
+        ('R-Blur', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', [
+            'Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsPrecomputedFmapPcFmap-APGD_25',
+            'Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsPrecomputedFmapPcFmap-APGDL2_25'])),
+        ('AT', (f'{log_root}//imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
+    ])
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    df = df[df['Perturbation Distance ‖ϵ‖2'] != 1.5]
+    outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+    _plot_baseline_pgd_results(df, plot_config, norm='2', stacked=stacked, min_eps=min_eps, max_eps=max_eps, legend=legend)
+    # plt.legend(loc='upper center', bbox_to_anchor=(0.45, 1.23), ncol=3)
+    plt.savefig(os.path.join(outdir, f'test_acc_bar_gaussian_baseline_l2{"_stacked" if stacked else ""}.pdf'), format='pdf')
+    plt.close()
+
+def plot_ecoset10_apgd_many_blurs_results():
+    plot_config = OrderedDict([
+        # (2, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS2CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
+        (3, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS3CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
+        (5, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS5CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
+        (8, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS8CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
+        (10.5, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
+        ('Blur($\sigma=10.5$)+\nNoisse($\sigma=0.25$)', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyGaussianBlurS2500CyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
+        ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsPrecomputedFmapPcFmap-APGD_25'])),
+    ])
+
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    colnames = {n:n for n in df.columns.to_list()}
+    colnames['Method'] = '$\sigma$'
+    df = df.rename(columns=colnames, errors="raise")
+    print(df)
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
+    sns.set_style("whitegrid")
+    # cmap = plt.cm.get_cmap('Set1')
+    # sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
+        sns.lineplot(y='Accuracy', x='Perturbation Distance ‖ϵ‖∞', hue='$\sigma$', style='$\sigma$', 
+                hue_order=plot_config, markers=True, data=df[df['Perturbation Distance ‖ϵ‖∞'] <= 0.008])
+    # plt.legend(loc='best', ncol=3)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=3)
+    # plt.ylim((0,1))
+    # plt.yticks([i*10 for i in range(0,11,2)], [i*10 for i in range(0,11,2)])
+    # plt.legend([],[], frameon=False)
+    # plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_blur_std.pdf'), bbox_inches='tight')
+    plt.close()
+
+def plot_ecoset10_apgd_many_WDs_results():
+    plot_config = OrderedDict([
+        # (2, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS2CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
+        ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsPrecomputedFmapPcFmap-APGD_25'])),
+        (5e-3, (f'{log_root}/ecoset10-0.0/Ecoset10CyclicLRWD5e_3RandAugmentXResNet2x18', ['APGD_25'])),
+        (1e-3, (f'{log_root}/ecoset10-0.0/Ecoset10CyclicLRWD1e_3RandAugmentXResNet2x18', ['APGD_25'])),
+        (5e-4, (f'{log_root}/ecoset10-0.0/Ecoset10CyclicLRRandAugmentXResNet2x18', ['APGD'])),
+    ])
+
+    logdicts = get_logdict(plot_config)
+    df = create_data_df(logdicts, plot_config)
+    colnames = {n:n for n in df.columns.to_list()}
+    colnames['Method'] = '$\lambda$'
+    df = df.rename(columns=colnames, errors="raise")
+    print(df)
+    outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
+    sns.set_style("whitegrid")
+    # cmap = plt.cm.get_cmap('Set1')
+    # sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
+    with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
+        sns.lineplot(y='Accuracy', x='Perturbation Distance ‖ϵ‖∞', hue='$\lambda$', style='$\lambda$', 
+                hue_order=plot_config, markers=True, data=df[df['Perturbation Distance ‖ϵ‖∞'] <= 0.008])
+    # plt.legend(loc='best', ncol=3)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=3)
+    # plt.ylim((0,1))
+    # plt.yticks([i*10 for i in range(0,11,2)], [i*10 for i in range(0,11,2)])
+    # plt.legend([],[], frameon=False)
+    # plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_weight_decay.pdf'), bbox_inches='tight')
+    plt.close()
+
+# plot_imagenet_autoattack_pgdinf_results(min_eps=0.002, max_eps=0.008, legend=True)
+# plot_imagenet_autoattack_pgdl2_results(min_eps=0.5, max_eps=2.0)
+# plot_imagenet_gaussian_baseline_pgdinf_results(min_eps=0.002, max_eps=0.008)
+# plot_imagenet_gaussian_baseline_pgdl2_results(min_eps=.5, max_eps=2.)
+
+# plot_ecoset10_apgd_many_blurs_results()
+plot_ecoset10_apgd_many_WDs_results()
+
+# plot_imagenet_apgd_nfixations_results()
 # plot_imagenet_apgd_vscale_results()
 # plot_imagenet_apgd_method_results()
 # plot_imagenet_apgd_step_results()

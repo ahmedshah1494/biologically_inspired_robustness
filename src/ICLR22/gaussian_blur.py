@@ -70,6 +70,7 @@ class Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
+    std = 10.5
     def get_dataset_params(self) :
         p = get_ecoset10_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
@@ -84,7 +85,7 @@ class Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18(AbstractTask):
         return p
 
     def get_model_params(self):
-        rblur_p = GaussianBlurLayer.ModelParams(GaussianBlurLayer, std=10.5)
+        rblur_p = GaussianBlurLayer.ModelParams(GaussianBlurLayer, std=self.std)
         resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 10), num_classes=10,
                                             normalization_layer_params=NormalizationLayer.get_params(),
                                             widen_factor=self.widen_factor)
@@ -94,7 +95,7 @@ class Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18(AbstractTask):
     def get_experiment_params(self) -> BaseExperimentConfig:
         nepochs = 60
         return BaseExperimentConfig(
-            MixedPrecisionAdversarialTrainer.TrainerParams(MixedPrecisionAdversarialTrainer,
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
                 TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
                     tracking_mode='max', scheduler_step_after_epoch=False
                 )
@@ -103,6 +104,18 @@ class Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18(AbstractTask):
             OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=375, pct_start=0.1, anneal_strategy='linear'),
             logdir=LOGDIR, batch_size=128
         )
+
+class Ecoset10GaussianBlurS8CyclicLR1e_1RandAugmentXResNet2x18(Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18):
+    std=8.
+
+class Ecoset10GaussianBlurS5CyclicLR1e_1RandAugmentXResNet2x18(Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18):
+    std=5.
+
+class Ecoset10GaussianBlurS3CyclicLR1e_1RandAugmentXResNet2x18(Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18):
+    std=3.
+
+class Ecoset10GaussianBlurS2CyclicLR1e_1RandAugmentXResNet2x18(Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18):
+    std=2.
 
 class Ecoset10NoisyGaussianBlurS2500CyclicLR1e_1RandAugmentXResNet2x18(Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18):
     noise_std = 0.25
@@ -212,3 +225,46 @@ class Cifar10NoisyGaussianBlurCyclicLRAutoAugmentWideResNet4x22(Cifar10GaussianB
                                             widen_factor=self.widen_factor)
         p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rp, resnet_p)
         return p
+
+class ImagenetGaussianBlurCyclicLRRandAugmentXResNet2x18(AbstractTask):
+    imgs_size = 224
+    input_size = [3, imgs_size, imgs_size]
+    widen_factor = 2
+    noise_std = 0.125
+    def get_dataset_params(self) :
+        p = get_imagenet_folder_params(num_train=1_275_000, train_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.RandomCrop(self.imgs_size),
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandAugment(magnitude=15)
+            ],
+            test_transforms=[
+                torchvision.transforms.Resize(self.imgs_size),
+                torchvision.transforms.CenterCrop(self.imgs_size),
+            ])
+        # Pointing to a folder with only the test set, and some dummy train and val data. 
+        # Use this on workhorse to avoid delay due to slow NFS.
+        # p.datafolder = f'{logdir_root}/imagenet/eval_dataset_dir'
+        return p
+
+    def get_model_params(self):
+        rblur_p = GaussianBlurLayer.ModelParams(GaussianBlurLayer, std=10.5)
+        resnet_p = XResNet18.ModelParams(XResNet18, CommonModelParams(self.input_size, 1000), num_classes=1000,
+                                            normalization_layer_params=NormalizationLayer.get_params(),
+                                            widen_factor=self.widen_factor)
+        p = GeneralClassifier.ModelParams(GeneralClassifier, self.input_size, rblur_p, resnet_p)
+        return p
+
+    def get_experiment_params(self) -> BaseExperimentConfig:
+        nepochs = 25
+        return BaseExperimentConfig(
+            LightningAdversarialTrainer.TrainerParams(LightningAdversarialTrainer,
+                TrainingParams(logdir=LOGDIR, nepochs=nepochs, early_stop_patience=50, tracked_metric='val_accuracy',
+                    tracking_mode='max', scheduler_step_after_epoch=False
+                )
+            ),
+            SGDOptimizerConfig(lr=0.2, weight_decay=5e-4, momentum=0.9, nesterov=True),
+            # OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=5632, pct_start=0.1, anneal_strategy='cos'),
+            OneCycleLRConfig(max_lr=0.1, epochs=nepochs, steps_per_epoch=4916, pct_start=0.1, anneal_strategy='cos', div_factor=10, three_phase=True),
+            logdir=LOGDIR, batch_size=64
+        )
