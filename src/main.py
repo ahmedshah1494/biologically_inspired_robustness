@@ -26,6 +26,7 @@ def get_task_class_from_str(s):
     return task_cls
 
 attacks =  {
+            'FGSM': eval.get_fgsm_atk,
             'APGD': eval.get_apgd_atk,
             'APGD_75': eval.get_apgd_75s_atk,
             'APGD_50': eval.get_apgd_50s_atk,

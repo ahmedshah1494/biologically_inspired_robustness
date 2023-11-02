@@ -21,6 +21,11 @@ from adversarialML.biologically_inspired_models.src.fixation_prediction.fixation
 from mllib.param import BaseParameters
 import numpy as np
 
+def get_fgsm_atk(eps):
+    atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.FGSMINF, SupportedBackend.TORCHATTACKS)
+    atk_p.eps = eps
+    return atk_p
+
 def get_pgd_atk(eps):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.PGDLINF, SupportedBackend.TORCHATTACKS)
     atk_p.eps = eps
@@ -204,7 +209,7 @@ def get_square_atk(eps):
     atk_p = AttackParamFactory.get_attack_params(SupportedAttacks.SQUARELINF, SupportedBackend.TORCHATTACKS)
     atk_p.eps = eps
     atk_p.n_queries = 5000
-    atk_p.n_restarts = 2
+    atk_p.n_restarts = 1
     atk_p.seed = time()
     return atk_p
 

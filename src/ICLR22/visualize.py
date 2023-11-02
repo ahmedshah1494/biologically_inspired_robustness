@@ -1386,46 +1386,59 @@ def plot_neurips_ecoset_cc_results():
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset')
     sns.set_style("whitegrid")
     # sns.catplot(x='Corruption Severity', y='Accuracy', hue='Method', kind="box", col='Corruption Type', hue_order=plot_config, data=df)
-    sns.boxplot(x='Corruption Severity', y='Accuracy', hue='Method', hue_order=plot_config, data=df, showfliers=False)
-    # plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
-    # plt.legend([],[], frameon=False)
-    # plt.ylim((0,1))
-    # plt.yticks([i*10 for i in range(11)])
+    # sns.boxplot(x='Corruption Severity', y='Accuracy', hue='Method', hue_order=plot_config, data=df, showfliers=False)
+    # # plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
+    # # plt.legend([],[], frameon=False)
+    # # plt.ylim((0,1))
+    # # plt.yticks([i*10 for i in range(11)])
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(outdir, 'test_acc_bar_allcc_nips.pdf'))
+    # plt.close()
+
+    df['Accuracy'] = df['Accuracy'] * 100
+    plt.figure(figsize=(12,5))
+    with sns.plotting_context("paper", font_scale=2.7, rc={'lines.linewidth': 3.}):
+        ax=sns.barplot(data=df, x='Corruption Severity', y='Accuracy', hue='Method', hue_order=plot_config, ci=None)
+        ax.set_ylim((0,60))
+    with sns.plotting_context("paper", font_scale=2., rc={'lines.linewidth': 3.}):
+        for container in ax.containers:
+            ax.bar_label(container, fmt='%d', label_type='edge', rotation=90)
+    plt.legend([],[], frameon=False)
     plt.tight_layout()
-    plt.savefig(os.path.join(outdir, 'test_acc_bar_allcc_nips.pdf'))
+    plt.savefig(os.path.join(outdir, 'test_acc_bar_allcc.pdf'))
     plt.close()
 
-    corruption_types = df['Corruption Type'].unique()
-    for i, ctype in enumerate(corruption_types):
-        sns.boxplot(x='Corruption Severity', y='Accuracy', 
-                    hue='Method', hue_order=plot_config, 
-                    data=df[df['Corruption Type'] == ctype])
-        if i == 0:
-            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
-        else:
-            plt.legend([],[], frameon=False)
-        plt.ylim((0,1))
-        plt.yticks([i/10 for i in range(11)], [i*10 for i in range(11)])
-        plt.tight_layout()
-        plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}_nips.pdf'))
-        plt.close()
+    # corruption_types = df['Corruption Type'].unique()
+    # for i, ctype in enumerate(corruption_types):
+    #     sns.boxplot(x='Corruption Severity', y='Accuracy', 
+    #                 hue='Method', hue_order=plot_config, 
+    #                 data=df[df['Corruption Type'] == ctype])
+    #     if i == 0:
+    #         plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
+    #     else:
+    #         plt.legend([],[], frameon=False)
+    #     plt.ylim((0,1))
+    #     plt.yticks([i/10 for i in range(11)], [i*10 for i in range(11)])
+    #     plt.tight_layout()
+    #     plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}_nips.pdf'))
+    #     plt.close()
     
-    outdir = maybe_create_dir(f'{outdir_root}/Ecoset/cc_method_plots')
-    corruption_types = df['Corruption Method'].unique()
-    for i, ctype in enumerate(corruption_types):
-        with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
-            sns.lineplot(x='Corruption Severity', y='Accuracy', 
-                    hue='Method', hue_order=plot_config, 
-                    data=df[df['Corruption Method'] == ctype])
-        if i == 0:
-            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
-        else:
-            plt.legend([],[], frameon=False)
-        plt.ylim((0,1))
-        # plt.yticks([i*10 for i in range(11)])
-        plt.tight_layout()
-        plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}_nips.pdf'))
-        plt.close()
+    # outdir = maybe_create_dir(f'{outdir_root}/Ecoset/cc_method_plots')
+    # corruption_types = df['Corruption Method'].unique()
+    # for i, ctype in enumerate(corruption_types):
+    #     with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
+    #         sns.lineplot(x='Corruption Severity', y='Accuracy', 
+    #                 hue='Method', hue_order=plot_config, 
+    #                 data=df[df['Corruption Method'] == ctype])
+    #     if i == 0:
+    #         plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
+    #     else:
+    #         plt.legend([],[], frameon=False)
+    #     plt.ylim((0,1))
+    #     # plt.yticks([i*10 for i in range(11)])
+    #     plt.tight_layout()
+    #     plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}_nips.pdf'))
+    #     plt.close()
 
 def plot_all_ecoset_many_fixation_results():
     plot_config = OrderedDict([
@@ -2041,57 +2054,106 @@ def plot_imagenet_cc_results():
     plot_config = OrderedDict([
         ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
         ('5-RandAffine', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['CC5RandAugAPGD'])),
-        ('R-Blur', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsCCAPGD'])),
         ('R-Warp', (f'{log_root}/imagenet_folder-0.0/ImagenetRetinaWarpCyclicLRRandAugmentXResNet2x18', ['Top5FixationsDetNoisedeepgazeIII:rwarp-6.1-7.0-7.1-in1kFixationsCCAPGD'])),
         ('VOneBlock', (f'{log_root}/imagenet_folder-0.0/ImagenetVOneBlockCyclicLRXResNet2x18', ['DetNoiseCCAPGD'])),
+        ('R-Blur', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsCCAPGD'])),
         ('AT', (f'{log_root}/imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['CCAPGD'])),
     ])
 
     df = load_cc_results(plot_config, '/home/mshah1/workhorse3/imagenet/distorted/test_img_paths_and_labels-190K.csv')
     print(df)
     outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
+
+
     sns.set_style("whitegrid")
-    # sns.catplot(x='Corruption Severity', y='Accuracy', hue='Method', kind="box", col='Corruption Type', hue_order=plot_config, data=df)
-    sns.boxplot(x='Corruption Severity', y='Accuracy', hue='Method', hue_order=plot_config, data=df, showfliers=False)
-    # plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
-    plt.legend([],[], frameon=False)
-    # plt.ylim((0,1))
-    # plt.yticks([i*10 for i in range(11)])
+    # # sns.catplot(x='Corruption Severity', y='Accuracy', hue='Method', kind="box", col='Corruption Type', hue_order=plot_config, data=df)
+    # sns.boxplot(x='Corruption Severity', y='Accuracy', hue='Method', hue_order=plot_config, data=df, showfliers=False)
+    # # plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=4)
+    # plt.legend([],[], frameon=False)
+    # # plt.ylim((0,1))
+    # # plt.yticks([i*10 for i in range(11)])
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(outdir, 'test_acc_box_allcc.pdf'))
+    # plt.close()
+
+    # ce_rows = []
+    # base_model_df = df[df['Method'] == 'ResNet']
+    # for corr in df['Corruption Method'].unique():
+    #     base_acc = base_model_df[base_model_df['Corruption Method'] == corr]['Accuracy'].mean()
+    #     for model_name in df['Method'].unique():
+    #         model_acc = df[(df['Method'] == model_name) & (df['Corruption Method'] == corr)]['Accuracy'].mean()
+    #         ce = model_acc / base_acc
+    #         ce_rows.append({
+    #             'Method': model_name,
+    #             'Corruption Method': corr,
+    #             'mCE': ce
+    #         })
+    # ce_df = pd.DataFrame(ce_rows)
+    # print(ce_df)
+    # plt.figure(figsize=(8,8))
+    # with sns.plotting_context("paper", font_scale=2.7, rc={'lines.linewidth': 3.}):
+    #     sns.barplot(data=ce_df, x='Method', y='mCE', hue='Method', hue_order=plot_config, ci=None)
+    # plt.legend([],[], frameon=False)
+    # plt.xticks(rotation=45, ha='center')
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(outdir, 'test_mce_bar_allcc.pdf'))
+    # plt.close()
+
+    df['Accuracy'] = df['Accuracy'] * 100
+    plt.figure(figsize=(12,5.25))
+    with sns.plotting_context("paper", font_scale=2.7, rc={'lines.linewidth': 3.}):
+        ax=sns.barplot(data=df, x='Corruption Severity', y='Accuracy', hue='Method', hue_order=plot_config, ci=None)
+        ax.set_ylim((0,60))
+    with sns.plotting_context("paper", font_scale=2., rc={'lines.linewidth': 3.}):
+        for container in ax.containers:
+            ax.bar_label(container, fmt='%d', label_type='edge', rotation=90)
+        # plt.legend([],[], frameon=False)
+        plt.legend(loc='upper center', bbox_to_anchor=(0.7, 1.03), ncol=3)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_allcc.pdf'))
     plt.close()
+            
+    # plt.figure(figsize=(8,8))
+    # with sns.plotting_context("paper", font_scale=2.7, rc={'lines.linewidth': 3.}):
+    #     sns.lineplot(data=df, x='Corruption Severity', y='Accuracy', hue='Method', style='Method', hue_order=plot_config, ci=None)
+    #     # plt.legend([],[], frameon=False)
+    # plt.xticks(range(1,6))
+    # plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.1), ncol=3)
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(outdir, 'test_acc_line_allcc.pdf'))
+    # plt.close()
 
-    corruption_types = df['Corruption Type'].unique()
-    for i, ctype in enumerate(corruption_types):
-        sns.boxplot(x='Corruption Severity', y='Accuracy', 
-                    hue='Method', hue_order=plot_config, 
-                    data=df[df['Corruption Type'] == ctype])
-        if i == 0:
-            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
-        else:
-            plt.legend([],[], frameon=False)
-        plt.ylim((0,1))
-        plt.yticks([i/10 for i in range(11)], [i*10 for i in range(11)])
-        plt.tight_layout()
-        plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}.pdf'))
-        plt.close()
+    # corruption_types = df['Corruption Type'].unique()
+    # for i, ctype in enumerate(corruption_types):
+    #     sns.boxplot(x='Corruption Severity', y='Accuracy', 
+    #                 hue='Method', hue_order=plot_config, 
+    #                 data=df[df['Corruption Type'] == ctype])
+    #     if i == 0:
+    #         plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
+    #     else:
+    #         plt.legend([],[], frameon=False)
+    #     plt.ylim((0,1))
+    #     plt.yticks([i/10 for i in range(11)], [i*10 for i in range(11)])
+    #     plt.tight_layout()
+    #     plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}.pdf'))
+    #     plt.close()
     
-    outdir = maybe_create_dir(f'{outdir_root}/Imagenet/cc_method_plots')
-    corruption_types = df['Corruption Method'].unique()
-    for i, ctype in enumerate(corruption_types):
-        with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
-            sns.lineplot(x='Corruption Severity', y='Accuracy', 
-                    hue='Method', hue_order=plot_config, 
-                    data=df[df['Corruption Method'] == ctype])
-        if i == 0:
-            plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
-        else:
-            plt.legend([],[], frameon=False)
-        plt.ylim((0,1))
-        # plt.yticks([i*10 for i in range(11)])
-        plt.tight_layout()
-        plt.savefig(os.path.join(outdir, f'test_acc_bar_{ctype}.pdf'))
-        plt.close()
+    # outdir = maybe_create_dir(f'{outdir_root}/Imagenet/cc_method_plots')
+    # corruption_types = df['Corruption Method'].unique()
+    # for i, ctype in enumerate(corruption_types):
+    #     with sns.plotting_context("paper", font_scale=2.8, rc={'lines.linewidth': 2.}):
+    #         sns.lineplot(x='Corruption Severity', y='Accuracy', 
+    #                 hue='Method', hue_order=plot_config, 
+    #                 data=df[df['Corruption Method'] == ctype])
+    #     if i == 0:
+    #         plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.), ncol=2)
+    #     else:
+    #         plt.legend([],[], frameon=False)
+    #     plt.ylim((0,1))
+    #     # plt.yticks([i*10 for i in range(11)])
+    #     plt.tight_layout()
+    #     plt.savefig(os.path.join(outdir, f'test_acc_box_{ctype}.pdf'))
+    #     plt.close()
 
 def create_cc_table_df(logdicts, plot_config):
     data = []
@@ -2230,7 +2292,7 @@ def plot_ecoset_cc_results_table(stacked=False, min_eps=0., max_eps=1., legend=F
         result_rows.append(row)
     results_df = pd.DataFrame(result_rows)
     print(results_df.to_latex(index=False, float_format="%.1f"))
-    print(results_df.to_latex(columns=['Method', 'Overall Mean', 'Mean Low', 'Mean Hi', 'Mean CC', 'Mean WB', 'Clean'], index=False, float_format="%.1f"))
+    print(results_df.to_latex(columns=['Method', 'Overall Mean', 'Mean CC', 'Mean WB', 'Clean'], index=False, float_format="%.1f"))
 
     # filtered_cc_df = cc_df[(cc_df['Corruption Method'] != 'gaussian_noise') | (cc_df['Corruption Method'] != 'gaussian_blur')]
     # hisev_filtered_cc_df = filtered_cc_df[filtered_cc_df['Corruption Severity'] > 4]
@@ -2351,7 +2413,7 @@ def plot_imagenet_cc_results_table(stacked=False, min_eps=0., max_eps=1., legend
         result_rows.append(row)
     results_df = pd.DataFrame(result_rows)
     print(results_df.to_latex(index=False, float_format="%.1f"))
-    print(results_df.to_latex(columns=['Method', 'Overall Mean', 'Mean Low', 'Mean Hi', 'Mean CC', 'Mean WB', 'Clean'], index=False, float_format="%.1f"))
+    print(results_df.to_latex(columns=['Method', 'Overall Mean', 'Mean CC', 'Mean WB', 'Clean'], index=False, float_format="%.1f"))
 
 def plot_ecoset10_pgdinf_ablation_results():
     plot_config = OrderedDict([
@@ -2761,18 +2823,18 @@ def plot_imagenet_gaussian_baseline_pgdinf_results(stacked=False, min_eps=0., ma
     xlabel = 'Perturbation Distance ‖ϵ‖∞'
 
     plot_config = OrderedDict([
-        ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['APGD'])),
-        ('5-RandAffine', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['5RandAug', '5RandAugAPGD'])),
+        # ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        # ('5-RandAffine', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['5RandAug', '5RandAugAPGD'])),
         ('G-Blur($\sigma=10.5$)', (f'{log_root}/imagenet_folder-0.0/ImagenetGaussianBlurCyclicLRRandAugmentXResNet2x18', ['APGD_25'])),
         ('G-Noise($\sigma=0.125$)', (f'{log_root}/imagenet_folder-0.0/ImagenetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['DetNoiseAPGD_25'])),
         ('R-Blur', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', ['Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsPrecomputedFmapPcFmap-APGD_25'])),
-        ('AT', (f'{log_root}//imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        # ('AT', (f'{log_root}//imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD'])),
     ])
     logdicts = get_logdict(plot_config)
     df = create_data_df(logdicts, plot_config)
     outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
-    _plot_baseline_pgd_results(df, plot_config, norm='∞', stacked=stacked, min_eps=min_eps, max_eps=max_eps, legend=legend)
-    plt.legend(loc='upper center', bbox_to_anchor=(0.45, 1.23), ncol=3)
+    _plot_baseline_pgd_results(df, plot_config, norm='∞', stacked=stacked, min_eps=min_eps, max_eps=max_eps, legend=legend, figsize=(6,4))
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.24), ncol=2)
     plt.savefig(os.path.join(outdir, f'test_acc_bar_gaussian_baseline_linf{"_stacked" if stacked else ""}.pdf'), format='pdf')
     plt.close()
 
@@ -2780,20 +2842,20 @@ def plot_imagenet_gaussian_baseline_pgdl2_results(stacked=False, min_eps=0., max
     xlabel = 'Perturbation Distance ‖ϵ‖2'
 
     plot_config = OrderedDict([
-        ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
-        ('5-RandAffine', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['5RandAug', '5RandAugAPGDL2'])),
+        # ('ResNet', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
+        # ('5-RandAffine', (f'{log_root}/imagenet_folder-0.0/ImagenetCyclicLRRandAugmentXResNet2x18', ['5RandAug', '5RandAugAPGDL2'])),
         ('G-Blur($\sigma=10.5$)', (f'{log_root}/imagenet_folder-0.0/ImagenetGaussianBlurCyclicLRRandAugmentXResNet2x18', ['APGD_25','APGDL2_25',])),
         ('G-Noise($\sigma=0.125$)', (f'{log_root}/imagenet_folder-0.0/ImagenetGaussianNoiseCyclicLRRandAugmentXResNet2x18', ['DetNoiseAPGD_25','DetNoiseAPGDL2_25',])),
         ('R-Blur', (f'{log_root}/imagenet_folder-0.0/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18', [
             'Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsPrecomputedFmapPcFmap-APGD_25',
             'Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsPrecomputedFmapPcFmap-APGDL2_25'])),
-        ('AT', (f'{log_root}//imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
+        # ('AT', (f'{log_root}//imagenet_folder-0.008/imagenet_folder-0.008/ImagenetAdvTrainCyclicLRRandAugmentXResNet2x18', ['APGD', 'APGDL2'])),
     ])
     logdicts = get_logdict(plot_config)
     df = create_data_df(logdicts, plot_config)
     df = df[df['Perturbation Distance ‖ϵ‖2'] != 1.5]
     outdir = maybe_create_dir(f'{outdir_root}/Imagenet')
-    _plot_baseline_pgd_results(df, plot_config, norm='2', stacked=stacked, min_eps=min_eps, max_eps=max_eps, legend=legend)
+    _plot_baseline_pgd_results(df, plot_config, norm='2', stacked=stacked, min_eps=min_eps, max_eps=max_eps, legend=legend, figsize=(6,4))
     # plt.legend(loc='upper center', bbox_to_anchor=(0.45, 1.23), ncol=3)
     plt.savefig(os.path.join(outdir, f'test_acc_bar_gaussian_baseline_l2{"_stacked" if stacked else ""}.pdf'), format='pdf')
     plt.close()
@@ -2801,12 +2863,15 @@ def plot_imagenet_gaussian_baseline_pgdl2_results(stacked=False, min_eps=0., max
 def plot_ecoset10_apgd_many_blurs_results():
     plot_config = OrderedDict([
         # (2, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS2CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
-        (3, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS3CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
-        (5, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS5CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
-        (8, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS8CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
-        (10.5, (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
-        ('Blur($\sigma=10.5$)+\nNoisse($\sigma=0.25$)', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyGaussianBlurS2500CyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
-        ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsPrecomputedFmapPcFmap-APGD_25'])),
+        ("$\sigma=0$", (f'{log_root}/ecoset10-0.0/Ecoset10CyclicLRRandAugmentXResNet2x18', ['APGD'])),
+        ("$\sigma=3$", (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS3CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
+        ("$\sigma=5$", (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS5CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
+        ("$\sigma=8$", (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurS8CyclicLR1e_1RandAugmentXResNet2x18', ['APGD_25'])),
+        ("$\sigma=10.5^*$", (f'{log_root}/ecoset10-0.0/Ecoset10GaussianBlurCyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
+        ('Ada. Blur', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaBlurOnlyColorWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationScale=3APGD_25'])),
+        # ('R-Blur\n(No Noise)', (f'{log_root}/ecoset10-0.0/Ecoset10RetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['5FixationScale=3APGD_25'])),
+        # ('$\sigma_{blur}=10.5$\n$\sigma_{noise}=0.25$', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyGaussianBlurS2500CyclicLR1e_1RandAugmentXResNet2x18', ['APGD'])),
+        # ('R-Blur', (f'{log_root}/ecoset10-0.0/Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18', ['Top5FixationsScale=3DetNoisedeepgazeIII:rblur-6.1-7.0-7.1-in1kFixationsPrecomputedFmapPcFmap-APGD_25'])),
     ])
 
     logdicts = get_logdict(plot_config)
@@ -2816,6 +2881,7 @@ def plot_ecoset10_apgd_many_blurs_results():
     df = df.rename(columns=colnames, errors="raise")
     print(df)
     outdir = maybe_create_dir(f'{outdir_root}/Ecoset10')
+    plt.figure(figsize=(8,4))
     sns.set_style("whitegrid")
     # cmap = plt.cm.get_cmap('Set1')
     # sns.barplot(x='Perturbation Distance ‖ϵ‖∞', y='Accuracy', hue='Method', hue_order=plot_config, data=df)
@@ -2823,12 +2889,14 @@ def plot_ecoset10_apgd_many_blurs_results():
         sns.lineplot(y='Accuracy', x='Perturbation Distance ‖ϵ‖∞', hue='$\sigma$', style='$\sigma$', 
                 hue_order=plot_config, markers=True, data=df[df['Perturbation Distance ‖ϵ‖∞'] <= 0.008])
     # plt.legend(loc='best', ncol=3)
-    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.25), ncol=3)
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, 1.3), ncol=3)
     # plt.ylim((0,1))
     # plt.yticks([i*10 for i in range(0,11,2)], [i*10 for i in range(0,11,2)])
+    plt.xticks([0, 0.002, 0.004, 0.006, 0.008], [0, '', 0.004, '', 0.008])
     # plt.legend([],[], frameon=False)
     # plt.tight_layout()
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_blur_std.pdf'), bbox_inches='tight')
+    print(os.path.join(outdir, 'test_acc_bar_linf_blur_std.pdf'))
     plt.close()
 
 def plot_ecoset10_apgd_many_WDs_results():
@@ -2862,13 +2930,15 @@ def plot_ecoset10_apgd_many_WDs_results():
     plt.savefig(os.path.join(outdir, 'test_acc_bar_linf_weight_decay.pdf'), bbox_inches='tight')
     plt.close()
 
+# plot_imagenet_cc_results()
+
 # plot_imagenet_autoattack_pgdinf_results(min_eps=0.002, max_eps=0.008, legend=True)
 # plot_imagenet_autoattack_pgdl2_results(min_eps=0.5, max_eps=2.0)
-# plot_imagenet_gaussian_baseline_pgdinf_results(min_eps=0.002, max_eps=0.008)
-# plot_imagenet_gaussian_baseline_pgdl2_results(min_eps=.5, max_eps=2.)
+plot_imagenet_gaussian_baseline_pgdinf_results(min_eps=0.002, max_eps=0.008)
+plot_imagenet_gaussian_baseline_pgdl2_results(min_eps=.5, max_eps=2.)
 
 # plot_ecoset10_apgd_many_blurs_results()
-plot_ecoset10_apgd_many_WDs_results()
+# plot_ecoset10_apgd_many_WDs_results()
 
 # plot_imagenet_apgd_nfixations_results()
 # plot_imagenet_apgd_vscale_results()
