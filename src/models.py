@@ -1271,7 +1271,7 @@ class XResNet34(AbstractModel):
             self.preprocessing_layer = nn.Identity()
         self.resnet = self._make_resnet()
         if self.params.setup_classification:
-            x = self.resnet(torch.rand(1, *(self.params.common_params.input_size)))
+            x = self.resnet(torch.rand(2, *(self.params.common_params.input_size)))
             self.classifier = nn.Linear(x.shape[1], self.params.num_classes)
         if self.params.logit_ensembler_params is not None:
             self.logit_ensembler = self.params.logit_ensembler_params.cls(self.params.logit_ensembler_params)
@@ -1909,3 +1909,54 @@ class XResNetClassifierWithDeepResidualEnhancer(XResNetClassifierWithEnhancer):
         if return_logits:
             return logits, loss
         return loss
+
+class FlattenLayer(AbstractModel):
+    def forward(self, x, *args, **kwargs):
+        return x.reshape(x.shape[0], -1)
+
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        loss = torch.zeros((x.shape[0],), device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
+
+class LinearLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        common_params: CommonModelParams = field(factory=CommonModelParams)
+    
+    def __init__(self, params: ModelParams) -> None:
+        super().__init__(params)
+        self.params = params
+        self._make_network()
+
+    def _make_network(self):
+        input_size = self.params.common_params.input_size
+        if np.iterable(input_size):
+            input_size = np.prod(input_size)
+        self.layer = nn.Linear(input_size, self.params.common_params.num_units, bias=self.params.common_params.bias)
+    
+    def forward(self, x, **kwargs):
+        return self.layer(x)
+
+class DropoutLayer(AbstractModel):
+    @define(slots=False)
+    class ModelParams(BaseParameters):
+        dropout_p: float = 0.
+    
+    def __init__(self, params: BaseParameters) -> None:
+        super().__init__(params)
+        self.dropout = nn.Dropout(params.dropout_p)
+
+    def forward(self, x, *args, **kwargs):
+        return self.dropout(x)
+
+    def compute_loss(self, x, y, return_logits=True):
+        logits = self.forward(x)
+        loss = torch.zeros((x.shape[0],), device=x.device)
+        if return_logits:
+            return logits, loss
+        else:
+            return loss
