@@ -6,8 +6,8 @@ from mllib.tasks.base_tasks import AbstractTask
 import numpy as np
 import torch
 import evaluation_tasks as eval
-from adversarialML.biologically_inspired_models.src.runners import AdversarialAttackBatteryRunner, AdversarialExperimentRunner, RandomizedSmoothingRunner
-from utils import get_model_checkpoint_paths
+from rblur.src.runners import AdversarialAttackBatteryRunner, AdversarialExperimentRunner, RandomizedSmoothingRunner
+from rblur.utils import get_model_checkpoint_paths
 
 # torch.autograd.set_detect_anomaly(True)
 
