@@ -17,7 +17,7 @@ from torch.cuda import device_count as gpu_count
 hostname = gethostname()
 if 'bridges2' in hostname:
     logdir_root = '/ocean/projects/cis220031p/mshah1'
-elif 'workhorse' in hostname:
+elif hostname.endswith('.local'):
     logdir_root = '/share/workhorse3/mshah1'
 else:
     logdir_root = '/home/mshah1'
