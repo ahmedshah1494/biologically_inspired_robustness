@@ -221,10 +221,49 @@ class AdversarialTrainer(_Trainer, PruningMixin):
                 elif not iterable(v):
                     self.logger.add_scalar(k, v, global_step=step)
 
-# class PytorchLightningAdversarialTrainer(PytorchLightningLiteTrainerMixin, AdversarialTrainer):
-#     @define(slots=False)
-#     class TrainerParams(AdversarialTrainer.TrainerParams):
-#         lightning_lite_params: Type[LightningLiteParams] = field(factory=LightningLiteParams)
+def compute_adversarial_success_rate(clean_preds, preds, labels, target_labels):
+    if (labels == target_labels).all():
+        adv_succ = ((clean_preds == labels) & (preds != labels)).astype(float).mean()
+    else:
+        adv_succ = (preds == target_labels).astype(float).mean()
+    return adv_succ
+
+def update_and_save_logs(logdir, outfilename, load_fn, write_fn, save_fn, *save_fn_args, **save_fn_kwargs):
+    outfile = os.path.join(logdir, outfilename)
+    if os.path.exists(outfile):
+        old_metrics = load_fn(outfile)
+        tmpoutfile = os.path.join(logdir, '.'+outfilename)
+        shutil.copy(outfile, tmpoutfile)
+        save_fn(*save_fn_args, **save_fn_kwargs)
+        new_metrics = load_fn(outfile)
+        recursive_dict_update(new_metrics, old_metrics)
+        write_fn(old_metrics, outfile)
+    else:
+        save_fn(*save_fn_args, **save_fn_kwargs)
+
+def save_pred_and_label_csv(logdir, outfile, preds, labels, logits, atk_norms):
+    for atkname in preds.keys():
+        sorted_logits = np.argsort(logits[atkname], 1)
+        label_ranks = []
+        for sl, l in zip(sorted_logits, labels):
+            r = sorted_logits.shape[1] - sl.tolist().index(l) - 1
+            label_ranks.append(r)
+        with open(os.path.join(logdir, f'{atkname}_{outfile}'), 'w') as f:
+            f.write('L,P1,P2,P3,P4,P5,R,norm\n')
+            for p,l,r,sl,nrm in zip(preds[atkname], labels, label_ranks, sorted_logits, atk_norms[atkname]):
+                f.write(f'{l},{p},{sl[-2]},{sl[-3]},{sl[-4]},{sl[-5]},{r},{nrm}\n')
+
+def save_pred_and_label_csv_2(logdir, outfile, preds, labels, batch_idx):
+    mode = 'a' if batch_idx > 0 else 'w'
+    for atkname in preds.keys():
+        with open(os.path.join(logdir, f'{atkname}_{outfile}'), mode) as f:
+            for p,l in zip(preds[atkname], labels):
+                f.write(f'{l},{p}\n')
+
+def save_logits(logdir, outfile, labels, logits):
+    for atkname, atklogits in logits.items():
+        atklogits = atklogits.astype(np.float16)
+        np.savez_compressed(os.path.join(logdir, f'{atkname}_{outfile}'), labels=labels, logits=atklogits)
 
 class MixedPrecisionAdversarialTrainer(MixedPrecisionTrainerMixin, AdversarialTrainer):
     pass
