@@ -6,4 +6,4 @@
 	url = https://github.com/matthias-k/DeepGaze.git
 [submodule "retinawarp"]
 	path = retinawarp
-	url = https://github.com/dicarlolab/retinawarp.git
+	url = https://github.com/ahmedshah1494/retinawarp.git

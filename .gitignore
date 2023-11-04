@@ -15,3 +15,5 @@ MNIST/*
 *.Identifier
 rblur.egg-info/*
 *.pkl
+*/build/*
+*/dist/*
