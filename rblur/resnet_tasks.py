@@ -1,13 +1,13 @@
 import torchvision
-from adversarialML.biologically_inspired_models.src.mlp_mixer_models import NormalizationLayer
-from adversarialML.biologically_inspired_models.src.models import (
+from rblur.mlp_mixer_models import NormalizationLayer
+from rblur.models import (
     CommonModelParams, GeneralClassifier, SequentialLayers, XResNet34, XResNet18, XResNet50, WideResnet,
     ActivationLayer, BatchNorm2DLayer)
-from adversarialML.biologically_inspired_models.src.retina_preproc import (
+from rblur.retina_preproc import (
     RetinaBlurFilter, RetinaNonUniformPatchEmbedding, RetinaWarp, GaussianBlurLayer)
-from adversarialML.biologically_inspired_models.src.supconloss import \
+from rblur.supconloss import \
     TwoCropTransform
-from adversarialML.biologically_inspired_models.src.trainers import MixedPrecisionAdversarialTrainer, LightningAdversarialTrainer
+from rblur.trainers import MixedPrecisionAdversarialTrainer, LightningAdversarialTrainer
 from mllib.optimizers.configs import (AdamOptimizerConfig,
                                       CosineAnnealingWarmRestartsConfig,
                                       CyclicLRConfig, LinearLRConfig,
@@ -16,7 +16,7 @@ from mllib.optimizers.configs import (AdamOptimizerConfig,
 from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
-from adversarialML.biologically_inspired_models.src.task_utils import *
+from rblur.task_utils import *
 
 from task_utils import get_ecoset100folder_params, get_ecoset10_params, get_ecoset10folder_params
 

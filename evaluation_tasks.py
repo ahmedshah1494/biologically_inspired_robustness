@@ -517,16 +517,16 @@ def add_fixation_predictor_to_model(p, fixation_prediction_model_name, apply_ret
     model_name_split = fixation_prediction_model_name.split(':')
     if model_name_split[0] == 'deepgazeII':
         if len(model_name_split) == 0:
-            from adversarialML.biologically_inspired_models.src.fixation_prediction.models import DeepGazeII
+            from rblur.fixation_prediction.models import DeepGazeII
             fpm = DeepGazeII.get_params()
         else:
             raise NotImplementedError('custom configurations for deepgaze-II are not supported at this time.')
     elif model_name_split[0] == 'deepgazeIII':
         if len(model_name_split) == 0:
-            from adversarialML.biologically_inspired_models.src.fixation_prediction.models import DeepGazeIII
+            from rblur.fixation_prediction.models import DeepGazeIII
             fpm = DeepGazeIII.get_params()
         else:
-            from adversarialML.biologically_inspired_models.src.fixation_prediction.models import CustomBackboneDeepGazeIII
+            from rblur.fixation_prediction.models import CustomBackboneDeepGazeIII
             fpm = CustomBackboneDeepGazeIII.get_pretrained_model_params(model_name_split[1])
     else:
         raise NotImplementedError(f'Expected arch to be deepgazeII or deepgazeIII, but got {model_name_split[0]}')
@@ -558,7 +558,7 @@ class MultiRandAffineAugments(torch.nn.Module):
     def forward(self, img):
         # if 'plt' not in locals():
         #     import matplotlib.pyplot as plt
-        #     from adversarialML.biologically_inspired_models.src.retina_preproc import convert_image_tensor_to_ndarray
+        #     from rblur.retina_preproc import convert_image_tensor_to_ndarray
         rng_state = torch.get_rng_state()
         filtered = []
         for i in range(self.params.n):

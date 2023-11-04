@@ -27,9 +27,8 @@ import pytorch_lightning as pl
 
 from mllib.adversarial.attacks import AbstractAttackConfig, FoolboxAttackWrapper, FoolboxCWL2AttackWrapper, AutoAttackkWrapper
 from mllib.adversarial.randomized_smoothing.core import Smooth
-from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin
-from adversarialML.biologically_inspired_models.src.pruning import PruningMixin
-from adversarialML.biologically_inspired_models.src.utils import aggregate_dicts, merge_iterables_in_dict, write_json, write_pickle, load_json, recursive_dict_update, load_pickle
+from rblur.pruning import PruningMixin
+from rblur.utils import aggregate_dicts, merge_iterables_in_dict, write_json, write_pickle, load_json, recursive_dict_update, load_pickle
 
 import torchmetrics
 from tqdm import tqdm
@@ -229,105 +228,6 @@ class AdversarialTrainer(_Trainer, PruningMixin):
 
 class MixedPrecisionAdversarialTrainer(MixedPrecisionTrainerMixin, AdversarialTrainer):
     pass
-
-class ActivityOptimizationSchedule(Enum):
-    CONST = auto()
-    GEOM = auto()
-    LINEAR = auto()
-
-@define(slots=False)
-class ActivityOptimizationParams:
-    act_opt_lr_warmup_schedule: Type[ActivityOptimizationSchedule] = ActivityOptimizationSchedule.CONST
-    init_act_opt_lr: float = 1e-2
-    num_warmup_epochs: int = 5
-
-class ConsistentActivationModelAdversarialTrainer(AdversarialTrainer):
-    @define(slots=False)
-    class TrainerParams(BaseParameters):
-        training_params: Type[TrainingParams] = field(factory=TrainingParams)
-        adversarial_params: Type[AdversarialParams] = field(factory=AdversarialParams)
-        act_opt_params: ActivityOptimizationParams = field(factory=ActivityOptimizationParams)
-    
-    @classmethod
-    def get_params(cls):
-        return cls.TrainerParams(cls)
-
-    def __init__(self, params: TrainerParams, *args, **kwargs):
-        super().__init__(params, *args, **kwargs)
-        self.params = params
-        self._load_max_act_opt_lrs()
-
-    def _load_max_act_opt_lrs(self):
-        self.max_act_opt_lrs = {}
-        for n, m in self.model.named_modules():
-            if isinstance(m, ConsistencyOptimizationMixin):
-                self.max_act_opt_lrs[n] = m.act_opt_step_size
-
-    def _update_act_opt_lrs(self, epoch_idx: int):
-        if (epoch_idx < self.params.act_opt_params.num_warmup_epochs) and self.params.act_opt_params.act_opt_lr_warmup_schedule != ActivityOptimizationSchedule.CONST:
-            for n,m in self.model.named_modules():
-                if n in self.max_act_opt_lrs:
-                    init_lr = min(self.params.act_opt_params.init_act_opt_lr, self.max_act_opt_lrs[n])
-                    if self.params.act_opt_params.act_opt_lr_warmup_schedule == ActivityOptimizationSchedule.GEOM:
-                        m.act_opt_step_size = np.geomspace(init_lr, 
-                                                            self.max_act_opt_lrs[n], 
-                                                            self.params.act_opt_params.num_warmup_epochs)[epoch_idx]
-                    if self.params.act_opt_params.act_opt_lr_warmup_schedule == ActivityOptimizationSchedule.LINEAR:
-                        m.act_opt_step_size = np.linspace(init_lr, 
-                                                            self.max_act_opt_lrs[n], 
-                                                            self.params.act_opt_params.num_warmup_epochs)[epoch_idx]
-                    print(n, m.act_opt_step_size)
-
-    def train_loop(self, epoch_idx, post_loop_fn=None):
-        self._update_act_opt_lrs(epoch_idx)
-        return super().train_loop(epoch_idx, post_loop_fn)
-
-def compute_adversarial_success_rate(clean_preds, preds, labels, target_labels):
-    if (labels == target_labels).all():
-        adv_succ = ((clean_preds == labels) & (preds != labels)).astype(float).mean()
-    else:
-        adv_succ = (preds == target_labels).astype(float).mean()
-    return adv_succ
-
-def update_and_save_logs(logdir, outfilename, load_fn, write_fn, save_fn, *save_fn_args, **save_fn_kwargs):
-    outfile = os.path.join(logdir, outfilename)
-    if os.path.exists(outfile):
-        old_metrics = load_fn(outfile)
-        tmpoutfile = os.path.join(logdir, '.'+outfilename)
-        shutil.copy(outfile, tmpoutfile)
-        save_fn(*save_fn_args, **save_fn_kwargs)
-        new_metrics = load_fn(outfile)
-        recursive_dict_update(new_metrics, old_metrics)
-        write_fn(old_metrics, outfile)
-    else:
-        save_fn(*save_fn_args, **save_fn_kwargs)
-
-def save_pred_and_label_csv(logdir, outfile, preds, labels, logits, atk_norms):
-    for atkname in preds.keys():
-        sorted_logits = np.argsort(logits[atkname], 1)
-        label_ranks = []
-        for sl, l in zip(sorted_logits, labels):
-            r = sorted_logits.shape[1] - sl.tolist().index(l) - 1
-            label_ranks.append(r)
-        with open(os.path.join(logdir, f'{atkname}_{outfile}'), 'w') as f:
-            f.write('L,P1,P2,P3,P4,P5,R,norm\n')
-            for p,l,r,sl,nrm in zip(preds[atkname], labels, label_ranks, sorted_logits, atk_norms[atkname]):
-                f.write(f'{l},{p},{sl[-2]},{sl[-3]},{sl[-4]},{sl[-5]},{r},{nrm}\n')
-
-def save_pred_and_label_csv_2(logdir, outfile, preds, labels, batch_idx):
-    mode = 'a' if batch_idx > 0 else 'w'
-    for atkname in preds.keys():
-        with open(os.path.join(logdir, f'{atkname}_{outfile}'), mode) as f:
-            for p,l in zip(preds[atkname], labels):
-                f.write(f'{l},{p}\n')
-
-def save_logits(logdir, outfile, labels, logits):
-    for atkname, atklogits in logits.items():
-        atklogits = atklogits.astype(np.float16)
-        # sorted_logits_idx = np.argsort(logits[atkname], 1)
-        # t10_sorted_logits_idx = sorted_logits_idx[:, -10:][:, ::-1]
-        # t10_atklogits = np.sort(atklogits, axis=1)[:, -10:][:, ::-1]
-        np.savez_compressed(os.path.join(logdir, f'{atkname}_{outfile}'), labels=labels, logits=atklogits)
         
 class MultiAttackEvaluationTrainer(AdversarialTrainer):
     def __init__(self, params, *args, **kwargs):

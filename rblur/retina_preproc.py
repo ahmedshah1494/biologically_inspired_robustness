@@ -19,7 +19,7 @@ from attrs import define
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from einops import rearrange
-from adversarialML.biologically_inspired_models.retinawarp.retina import retina_pt
+from retinawarp.retina import retina_pt
 
 def convert_image_tensor_to_ndarray(img):
     return img.cpu().detach().transpose(0,1).transpose(1,2).numpy()
@@ -876,7 +876,7 @@ class VOneBlock(AbstractModel):
         kwargs_to_exclude = set(['cls', 'add_noise_during_inference', 'add_deterministic_noise_during_inference', 'dropout_p', 'color_mode'])
         kwargs = params.asdict(filter=lambda a,v: a.name not in kwargs_to_exclude)
         print(kwargs)
-        from adversarialML.biologically_inspired_models.vonenet.vonenet.vonenet import VOneNet
+        from vonenet.vonenet.vonenet import VOneNet
         voneblock = VOneNet(**kwargs)
         num_vone_channels = params.simple_channels+params.complex_channels
         if params.color_mode == 'exhaustive_single_opponent':

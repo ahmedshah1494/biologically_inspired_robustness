@@ -1,12 +1,12 @@
 import torchvision
-from adversarialML.biologically_inspired_models.src.mlp_mixer_models import NormalizationLayer
-from adversarialML.biologically_inspired_models.src.models import (
+from rblur.mlp_mixer_models import NormalizationLayer
+from rblur.models import (
     CommonModelParams, GeneralClassifier, SequentialLayers, XResNet34, XResNet18, XResNet50, WideResnet,
     ActivationLayer, BatchNorm2DLayer)
-from adversarialML.biologically_inspired_models.src.retina_preproc import VOneBlock, GaussianNoiseLayer, RetinaBlurFilter
-from adversarialML.biologically_inspired_models.src.supconloss import \
+from rblur.retina_preproc import VOneBlock, GaussianNoiseLayer, RetinaBlurFilter
+from rblur.supconloss import \
     TwoCropTransform
-from adversarialML.biologically_inspired_models.src.trainers import MixedPrecisionAdversarialTrainer, LightningAdversarialTrainer
+from rblur.trainers import MixedPrecisionAdversarialTrainer, LightningAdversarialTrainer
 from mllib.optimizers.configs import (AdamOptimizerConfig,
                                       CosineAnnealingWarmRestartsConfig,
                                       CyclicLRConfig, LinearLRConfig,
@@ -15,9 +15,9 @@ from mllib.optimizers.configs import (AdamOptimizerConfig,
 from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
-from adversarialML.biologically_inspired_models.src.task_utils import *
-from adversarialML.biologically_inspired_models.src.imagenet_mlp_mixer_tasks_commons import get_basic_mlp_mixer_params
-from adversarialML.biologically_inspired_models.src.retina_blur2 import RetinaBlurFilter as RBlur2
+from rblur.task_utils import *
+from rblur.imagenet_mlp_mixer_tasks_commons import get_basic_mlp_mixer_params
+from rblur.retina_blur2 import RetinaBlurFilter as RBlur2
 class Ecoset100VOneBlockCyclicLRRandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224
     input_size = [3, imgs_size, imgs_size]

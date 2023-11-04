@@ -5,23 +5,23 @@ from typing import List, Tuple, Type
 import numpy as np
 
 import torchvision
-from adversarialML.biologically_inspired_models.src.mlp_mixer_models import (
+from rblur.mlp_mixer_models import (
     ConsistentActivationMixerBlock, ConsistentActivationMixerMLP,
     FirstNExtractionClassifier, LinearLayer, MixerBlock, MixerMLP, MLPMixer,
     NormalizationLayer, UnfoldPatchExtractor)
-from adversarialML.biologically_inspired_models.src.models import (
+from rblur.models import (
     ConsistentActivationLayer, ConvEncoder, GeneralClassifier, IdentityLayer,
     ScanningConsistentActivationLayer, SequentialLayers, XResNet34, XResNet18, SupervisedContrastiveTrainingWrapper)
-from adversarialML.biologically_inspired_models.src.retina_preproc import (
+from rblur.retina_preproc import (
     AbstractRetinaFilter, RetinaBlurFilter, RetinaNonUniformPatchEmbedding,
     RetinaSampleFilter)
-from adversarialML.biologically_inspired_models.src.supconloss import \
+from rblur.supconloss import \
     TwoCropTransform
-from adversarialML.biologically_inspired_models.src.trainers import (
+from rblur.trainers import (
     ActivityOptimizationSchedule, AdversarialParams, AdversarialTrainer,
     ConsistentActivationModelAdversarialTrainer,
     MixedPrecisionAdversarialTrainer)
-from adversarialML.biologically_inspired_models.src.mlp_mixer_tasks import get_dataset_params
+from rblur.mlp_mixer_tasks import get_dataset_params
 from mllib.adversarial.attacks import (AttackParamFactory, SupportedAttacks,
                                        SupportedBackend)
 from mllib.datasets.dataset_factory import (ImageDatasetFactory,
@@ -37,7 +37,7 @@ from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
 from mllib.adversarial.attacks import TorchAttackAPGDInfParams
 
-from adversarialML.biologically_inspired_models.src.task_utils import *
+from rblur.task_utils import *
 
 _EPS_LIST = [0.0, 0.008, 0.016, 0.024, 0.032, 0.048, 0.064]
 _NEPOCHS = 300

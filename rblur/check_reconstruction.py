@@ -2,8 +2,8 @@ from argparse import ArgumentParser
 from importlib import import_module
 import torch
 import numpy as np
-from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
-from adversarialML.biologically_inspired_models.src.utils import load_pickle
+from rblur.runners import load_params_into_model
+from rblur.utils import load_pickle
 from matplotlib import pyplot as plt
 import os
 

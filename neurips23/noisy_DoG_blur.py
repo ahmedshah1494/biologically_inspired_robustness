@@ -1,10 +1,10 @@
 import torchvision
-from adversarialML.biologically_inspired_models.src.mlp_mixer_models import NormalizationLayer
-from adversarialML.biologically_inspired_models.src.models import (
+from rblur.mlp_mixer_models import NormalizationLayer
+from rblur.models import (
     CommonModelParams, GeneralClassifier, SequentialLayers, XResNet34, XResNet18,)
-from adversarialML.biologically_inspired_models.src.retina_blur2 import RetinaBlurFilter as RBlur2
-from adversarialML.biologically_inspired_models.src.retina_preproc import (GaussianNoiseLayer, RetinDoGBlurFilter)
-from adversarialML.biologically_inspired_models.src.trainers import LightningAdversarialTrainer
+from rblur.retina_blur2 import RetinaBlurFilter as RBlur2
+from rblur.retina_preproc import (GaussianNoiseLayer, RetinDoGBlurFilter)
+from rblur.trainers import LightningAdversarialTrainer
 from mllib.optimizers.configs import (AdamOptimizerConfig,
                                       CosineAnnealingWarmRestartsConfig,
                                       CyclicLRConfig, LinearLRConfig,
@@ -13,7 +13,7 @@ from mllib.optimizers.configs import (AdamOptimizerConfig,
 from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
-from adversarialML.biologically_inspired_models.src.task_utils import *
+from rblur.task_utils import *
 
 class Ecoset10NoisyRetinaDoGBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(AbstractTask):
     imgs_size = 224

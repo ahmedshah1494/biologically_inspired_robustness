@@ -6,7 +6,7 @@ from mllib.tasks.base_tasks import AbstractTask
 import numpy as np
 import torch
 import evaluation_tasks as eval
-from rblur.src.runners import AdversarialAttackBatteryRunner, AdversarialExperimentRunner, RandomizedSmoothingRunner
+from rblur.runners import AdversarialAttackBatteryRunner, AdversarialExperimentRunner, RandomizedSmoothingRunner
 from rblur.utils import get_model_checkpoint_paths
 
 # torch.autograd.set_detect_anomaly(True)

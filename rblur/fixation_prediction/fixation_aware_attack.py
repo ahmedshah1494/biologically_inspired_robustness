@@ -8,8 +8,8 @@ import numpy as np
 from copy import deepcopy
 
 # from mllib.adversarial.lib.autoattack.autopgd_base import APGDAttack
-from adversarialML.biologically_inspired_models.src.fixation_prediction.models import RetinaFilterWithFixationPrediction, unnormalized_gkern, _update_mask
-from adversarialML.biologically_inspired_models.src.models import IdentityLayer
+from rblur.fixation_prediction.models import RetinaFilterWithFixationPrediction, unnormalized_gkern, _update_mask
+from rblur.models import IdentityLayer
 from torchattacks.attack import Attack
 from torchattacks.attacks.apgd import APGD
 

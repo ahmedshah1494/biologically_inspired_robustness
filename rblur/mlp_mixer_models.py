@@ -1,7 +1,7 @@
 from copy import deepcopy
 from typing import List, Tuple, Union
 import torch
-from adversarialML.biologically_inspired_models.src.models import \
+from rblur.models import \
     CommonModelParams, CommonModelMixin
 from attrs import define, field
 from mllib.models.base_models import AbstractModel
@@ -11,7 +11,7 @@ import numpy as np
 from einops.layers.torch import Rearrange
 from einops import rearrange
 
-from adversarialML.biologically_inspired_models.src.models import ConsistencyOptimizationMixin, ConsistencyOptimizationParams, ConsistentActivationLayer, ConvParams, IdentityLayer
+from rblur.models import ConsistencyOptimizationMixin, ConsistencyOptimizationParams, ConsistentActivationLayer, ConvParams, IdentityLayer
 
 class LayerNormLayer(AbstractModel):
     @define(slots=False)
@@ -26,34 +26,6 @@ class LayerNormLayer(AbstractModel):
     
     def forward(self, x):
         return self.ln(x)
-
-class NormalizationLayer(AbstractModel):
-    @define(slots=False)
-    class ModelParams(BaseParameters):
-        mean: Union[float, List[float]] = [0.485, 0.456, 0.406]
-        std: Union[float, List[float]] = [0.229, 0.224, 0.225]
-
-    def __init__(self, params: ModelParams) -> None:
-        super().__init__(params)
-        if isinstance(self.params.mean, list):
-            self.mean = nn.parameter.Parameter(torch.FloatTensor(self.params.mean).reshape(1,-1,1,1), requires_grad=False)
-        if isinstance(self.params.std, list):
-            self.std = nn.parameter.Parameter(torch.FloatTensor(self.params.std).reshape(1,-1,1,1), requires_grad=False)
-    
-    def __repr__(self):
-        return f'NormalizationLayer(mean={self.params.mean}, std={self.params.std})'
-    
-    def forward(self, x):
-        return (x-self.mean)/self.std
-    
-    def compute_loss(self, x, y, return_logits=True):
-        logits = self.forward(x)
-        loss = torch.zeros((logits.shape[0],), device=x.device)
-        return logits
-        # if return_logits:
-        #     return logits, loss
-        # else:
-        #     return loss
 
 class LinearLayer(AbstractModel):
     @define(slots=False)

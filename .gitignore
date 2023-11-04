@@ -10,3 +10,8 @@ MNIST/*
 *.npz
 *.npy
 *.pt
+*.json
+*.eps
+*.Identifier
+rblur.egg-info/*
+*.pkl

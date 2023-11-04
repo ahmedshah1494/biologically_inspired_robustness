@@ -2,9 +2,9 @@ from argparse import ArgumentParser
 from importlib import import_module
 import torch
 import numpy as np
-from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
-from adversarialML.biologically_inspired_models.src.utils import load_pickle
-from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter
+from rblur.runners import load_params_into_model
+from rblur.utils import load_pickle
+from rblur.retina_preproc import AbstractRetinaFilter
 from mllib.datasets.dataset_factory import SupportedDatasets
 from matplotlib import pyplot as plt
 from mllib.param import BaseParameters

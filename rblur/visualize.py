@@ -19,7 +19,7 @@ from scipy.stats.mstats import f_oneway
 from matplotlib.animation import FuncAnimation
 import torch
 from tqdm import tqdm
-from adversarialML.biologically_inspired_models.src.utils import _compute_area_under_curve, load_logs, get_eps_from_logdict_key
+from rblur.utils import _compute_area_under_curve, load_logs, get_eps_from_logdict_key
 
 def get_model_from_state_dict(state_dict, args, d, num_classes):
     model = get_model(args.model_config, d, num_classes)

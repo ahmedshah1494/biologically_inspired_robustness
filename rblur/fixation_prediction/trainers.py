@@ -1,7 +1,7 @@
 import torch
 import numpy as np
-from adversarialML.biologically_inspired_models.src.trainers import LightningAdversarialTrainer, MultiAttackEvaluationTrainer
-from adversarialML.biologically_inspired_models.src.fixation_prediction.models import RetinaFilterWithFixationPrediction
+from rblur.trainers import LightningAdversarialTrainer, MultiAttackEvaluationTrainer
+from rblur.fixation_prediction.models import RetinaFilterWithFixationPrediction
 from mllib.trainers.base_trainers import PytorchLightningTrainer
 # from pysaliency.roc import general_roc
 # from pysaliency.numba_utils import auc_for_one_positive

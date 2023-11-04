@@ -30,7 +30,7 @@ from deepgaze_pytorch.training import _train
 
 from argparse import ArgumentParser
 from importlib import import_module
-from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
+from rblur.runners import load_params_into_model
 
 parser = ArgumentParser()
 parser.add_argument('--task', type=str, required=True)

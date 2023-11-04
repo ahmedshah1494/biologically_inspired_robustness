@@ -1,7 +1,7 @@
 import argparse
 import os
 import shutil
-from adversarialML.biologically_inspired_models.src.utils import load_json, write_pickle
+from rblur.utils import load_json, write_pickle
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dir')

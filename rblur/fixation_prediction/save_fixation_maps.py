@@ -5,13 +5,13 @@ from importlib import import_module
 import torch
 import torchvision
 import numpy as np
-from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
-from adversarialML.biologically_inspired_models.src.utils import load_pickle, load_json, write_json
-from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter
-from adversarialML.biologically_inspired_models.src.fixation_prediction.models import DeepGazeIIE
+from rblur.runners import load_params_into_model
+from rblur.utils import load_pickle, load_json, write_json
+from rblur.retina_preproc import AbstractRetinaFilter
+from rblur.fixation_prediction.models import DeepGazeIIE
 from mllib.datasets.dataset_factory import SupportedDatasets
 from mllib.datasets.imagenet_filelist_dataset import ImagenetFileListDataset
-from adversarialML.biologically_inspired_models.DeepGaze import deepgaze_pytorch
+from deepgaze_pytorch import deepgaze_pytorch
 from matplotlib import pyplot as plt
 from mllib.param import BaseParameters
 import matplotlib.patches as patches

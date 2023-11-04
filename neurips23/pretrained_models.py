@@ -1,8 +1,8 @@
-from adversarialML.biologically_inspired_models.src.mlp_mixer_models import NormalizationLayer
-from adversarialML.biologically_inspired_models.src.models import PretrainedTimmModel
-from adversarialML.biologically_inspired_models.src.task_utils import *
+from rblur.mlp_mixer_models import NormalizationLayer
+from rblur.models import PretrainedTimmModel
+from rblur.task_utils import *
 from mllib.tasks.base_tasks import AbstractTask
-from adversarialML.biologically_inspired_models.src.trainers import MixedPrecisionAdversarialTrainer, LightningAdversarialTrainer
+from rblur.trainers import MixedPrecisionAdversarialTrainer, LightningAdversarialTrainer
 from mllib.optimizers.configs import (AdamOptimizerConfig,
                                       CosineAnnealingWarmRestartsConfig,
                                       CyclicLRConfig, LinearLRConfig,

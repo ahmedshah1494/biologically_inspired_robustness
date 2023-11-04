@@ -11,9 +11,9 @@ import torch
 import torchvision
 from positional_encodings.torch_encodings import PositionalEncodingPermute2D
 
-from adversarialML.biologically_inspired_models.src.models import CommonModelParams, ConcurrentConsistencyOptimizationSequentialLayers, ConsistentActivationClassifier, ConsistentActivationLayer, ConvEncoder, EyeModel, GeneralClassifier, IdentityLayer, LearnablePositionEmbedding, PositionAwareScanningConsistentActivationLayer, ScanningConsistentActivationLayer, SequentialLayers
-from adversarialML.biologically_inspired_models.src.runners import AdversarialExperimentConfig, ConsistentActivationAdversarialExperimentConfig
-from adversarialML.biologically_inspired_models.src.trainers import ActivityOptimizationSchedule
+from rblur.models import CommonModelParams, ConcurrentConsistencyOptimizationSequentialLayers, ConsistentActivationClassifier, ConsistentActivationLayer, ConvEncoder, EyeModel, GeneralClassifier, IdentityLayer, LearnablePositionEmbedding, PositionAwareScanningConsistentActivationLayer, ScanningConsistentActivationLayer, SequentialLayers
+from rblur.runners import AdversarialExperimentConfig, ConsistentActivationAdversarialExperimentConfig
+from rblur.trainers import ActivityOptimizationSchedule
 
 def set_SGD_params(p: BaseExperimentConfig):
     p.optimizer_config = SGDOptimizerConfig()

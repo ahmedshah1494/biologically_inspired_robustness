@@ -4,7 +4,7 @@ import os
 import json
 import random
 
-from adversarialML.biologically_inspired_models.src.utils import load_json, aggregate_dicts
+from rblur.utils import load_json, aggregate_dicts
 
 logdir = '/share/workhorse3/mshah1/biologically_inspired_models/iclr22_logs/'
 

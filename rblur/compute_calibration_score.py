@@ -4,10 +4,10 @@ import os
 import torch
 import torchvision
 import numpy as np
-from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
-from adversarialML.biologically_inspired_models.src.utils import load_pickle, load_json, write_json
-from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter
-from adversarialML.biologically_inspired_models.src.fixation_prediction.models import FixationPredictionNetwork
+from rblur.runners import load_params_into_model
+from rblur.utils import load_pickle, load_json, write_json
+from rblur.retina_preproc import AbstractRetinaFilter
+from rblur.fixation_prediction.models import FixationPredictionNetwork
 from mllib.datasets.dataset_factory import SupportedDatasets, ImageDatasetFactory
 from mllib.datasets.imagenet_filelist_dataset import ImagenetFileListDataset
 from matplotlib import pyplot as plt

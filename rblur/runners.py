@@ -6,7 +6,7 @@ from mllib.runners.base_runners import BaseRunner
 from mllib.runners.configs import BaseExperimentConfig
 import torch
 from mllib.datasets.dataset_factory import SupportedDatasets
-from adversarialML.biologically_inspired_models.src.utils import write_pickle
+from rblur.utils import write_pickle
 import webdataset as wds
 @define(slots=False)
 class TransferLearningExperimentConfig(BaseExperimentConfig):

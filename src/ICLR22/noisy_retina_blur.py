@@ -1,7 +1,9 @@
 import torchvision
+from rblur.mlp_mixer_models import NormalizationLayer
 from rblur.models import (
     CommonModelParams, GeneralClassifier, SequentialLayers, XResNet18, WideResnet,SupervisedContrastiveTrainingWrapper, IdentityLayer,
-    MultiheadSelfAttentionEnsembler, LSTMEnsembler, NormalizationLayer, LinearLayer)
+    MultiheadSelfAttentionEnsembler, LSTMEnsembler)
+from rblur.mlp_mixer_models import LinearLayer
 from rblur.retina_blur2 import RetinaBlurFilter as RBlur2
 from rblur.retina_preproc import (
     RetinaBlurFilter, RetinaNonUniformPatchEmbedding, RetinaWarp, GaussianNoiseLayer, RetinDoGBlurFilter)

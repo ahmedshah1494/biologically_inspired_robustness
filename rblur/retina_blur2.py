@@ -11,7 +11,7 @@ from mllib.param import BaseParameters
 from attrs import define
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter, gaussian_fn, seperable_gaussian_blur_pytorch, dist_to_prob, get_isodensity_box_width, convert_image_tensor_to_ndarray
+from rblur.retina_preproc import AbstractRetinaFilter, gaussian_fn, seperable_gaussian_blur_pytorch, dist_to_prob, get_isodensity_box_width, convert_image_tensor_to_ndarray
 
 class Rectangle:
     def __init__(self, x1, y1, x2, y2) -> None:

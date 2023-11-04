@@ -2,20 +2,20 @@ from copy import deepcopy
 from typing import List, Tuple
 
 import torchvision
-from adversarialML.biologically_inspired_models.src.mlp_mixer_models import (
+from rblur.mlp_mixer_models import (
     ConsistentActivationMixerBlock, ConsistentActivationMixerMLP,
     FirstNExtractionClassifier, LinearLayer, MixerBlock, MixerMLP, MLPMixer,
     NormalizationLayer, UnfoldPatchExtractor)
-from adversarialML.biologically_inspired_models.src.models import (
+from rblur.models import (
     CommonModelParams, ConsistentActivationLayer, ConvEncoder, GeneralClassifier, IdentityLayer,
     ScanningConsistentActivationLayer, SequentialLayers, XResNet34, XResNet18, SupervisedContrastiveTrainingWrapper,
     ActivationLayer, BatchNorm2DLayer)
-from adversarialML.biologically_inspired_models.src.retina_preproc import (
+from rblur.retina_preproc import (
     AbstractRetinaFilter, RetinaBlurFilter, RetinaNonUniformPatchEmbedding,
     RetinaSampleFilter)
-from adversarialML.biologically_inspired_models.src.supconloss import \
+from rblur.supconloss import \
     TwoCropTransform
-from adversarialML.biologically_inspired_models.src.trainers import (
+from rblur.trainers import (
     ActivityOptimizationSchedule, AdversarialParams, AdversarialTrainer,
     ConsistentActivationModelAdversarialTrainer, PytorchLightningAdversarialTrainer, LightningLiteParams,
     MixedPrecisionAdversarialTrainer, LightningAdversarialTrainer)
@@ -31,9 +31,9 @@ from mllib.optimizers.configs import (AdamOptimizerConfig,
 from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.tasks.base_tasks import AbstractTask
 from torch import nn
-from adversarialML.biologically_inspired_models.src.task_utils import *
+from rblur.task_utils import *
 import torch
-from adversarialML.biologically_inspired_models.src import imagenet_mlp_mixer_tasks_commons
+from rblur import imagenet_mlp_mixer_tasks_commons
 
 def add_retina_blur_to_mlp_mixer(cnn_params, input_size, cone_std=0.12, rod_std=0.06, max_rod_density=0.12, kernel_size=9, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
     rblur = RetinaBlurFilter.ModelParams(RetinaBlurFilter, input_size, cone_std=cone_std, rod_std=rod_std, max_rod_density=max_rod_density, kernel_size=9)

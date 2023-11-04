@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
-from adversarialML.biologically_inspired_models.src.utils import get_eps_from_logdict_key, load_json, aggregate_dicts, lazy_load_pickle
+from rblur.utils import get_eps_from_logdict_key, load_json, aggregate_dicts, lazy_load_pickle
 import re
 # plt.rcParams['text.usetex'] = True
 

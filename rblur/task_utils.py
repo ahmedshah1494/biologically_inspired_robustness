@@ -3,8 +3,8 @@ from typing import Type
 from mllib.datasets.dataset_factory import (ImageDatasetFactory,
                                             SupportedDatasets)
 import torchvision
-from adversarialML.biologically_inspired_models.src.trainers import AdversarialParams, AdversarialTrainer
-from adversarialML.biologically_inspired_models.src.utils import gethostname
+from rblur.trainers import AdversarialParams, AdversarialTrainer
+from rblur.utils import gethostname
 from mllib.adversarial.attacks import (AttackParamFactory, SupportedAttacks,
                                        SupportedBackend)
 from mllib.runners.configs import BaseExperimentConfig

@@ -4,7 +4,7 @@ from typing import List, Tuple, Type, Union
 import numpy as np
 
 import torch
-from adversarialML.biologically_inspired_models.src.models import \
+from rblur.models import \
     CommonModelParams, CommonModelMixin
 from attrs import define, field
 from mllib.models.base_models import AbstractModel

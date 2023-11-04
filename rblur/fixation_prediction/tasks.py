@@ -1,32 +1,32 @@
 import os
 
 import torchvision
-from adversarialML.biologically_inspired_models.src.fixation_prediction.models import (
+from rblur.fixation_prediction.models import (
     FixationHeatmapPredictionNetwork, FixationPredictionNetwork,
     RetinaFilterWithFixationPrediction,
     TiedBackboneRetinaFixationPreditionClassifier,
     DeepGazeII, DeepGazeIIE, DeepGazeIII,
     MultiFixationTiedBackboneClassifier, CustomBackboneDeepGazeIII)
-from adversarialML.biologically_inspired_models.src.fixation_prediction.trainers import (
+from rblur.fixation_prediction.trainers import (
     ClickmeImportanceMapLightningAdversarialTrainer,
     FixationPointLightningAdversarialTrainer,
     RetinaFilterWithFixationPredictionLightningAdversarialTrainer)
-from adversarialML.biologically_inspired_models.src.mlp_mixer_models import (
+from rblur.mlp_mixer_models import (
     LinearLayer, NormalizationLayer)
-from adversarialML.biologically_inspired_models.src.models import (
+from rblur.models import (
     CommonModelParams, ConvEncoder, ConvParams, GeneralClassifier,
     IdentityLayer, SequentialLayers, XResNet18, MultiheadSelfAttentionEnsembler)
-from adversarialML.biologically_inspired_models.src.retina_blur2 import \
+from rblur.retina_blur2 import \
     RetinaBlurFilter as RBlur2
-from adversarialML.biologically_inspired_models.src.retina_preproc import (
+from rblur.retina_preproc import (
     GaussianNoiseLayer, RetinaBlurFilter, RetinaNonUniformPatchEmbedding,
     RetinaWarp)
-from adversarialML.biologically_inspired_models.src.runners import \
+from rblur.runners import \
     TransferLearningExperimentConfig
-from adversarialML.biologically_inspired_models.src.supconloss import \
+from rblur.supconloss import \
     TwoCropTransform
-from adversarialML.biologically_inspired_models.src.task_utils import *
-from adversarialML.biologically_inspired_models.src.trainers import \
+from rblur.task_utils import *
+from rblur.trainers import \
     LightningAdversarialTrainer
 from mllib.datasets.dataset_factory import SupportedDatasets
 from mllib.optimizers.configs import (AdamOptimizerConfig,

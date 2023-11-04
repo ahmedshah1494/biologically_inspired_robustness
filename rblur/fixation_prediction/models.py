@@ -11,7 +11,7 @@ import torch
 from fastai.vision.models.xresnet import xresnet18, XResNet
 from fastai.layers import ResBlock
 from fastai.layers import ResBlock
-from adversarialML.biologically_inspired_models.src.runners import load_params_into_model
+from rblur.runners import load_params_into_model
 import torchvision
 from torchvision.models.segmentation import fcn_resnet50, fcn, deeplabv3_resnet50, deeplabv3
 from torchvision.models.resnet import resnet18, ResNet
@@ -20,9 +20,9 @@ from matplotlib import pyplot as plt
 import math
 from einops import rearrange
 
-from adversarialML.biologically_inspired_models.src.models import CommonModelParams, ConvEncoder, XResNet34, convbnrelu, bnrelu
-from adversarialML.biologically_inspired_models.src.retina_blur2 import RetinaBlurFilter as RBlur2
-from adversarialML.biologically_inspired_models.DeepGaze import deepgaze_pytorch
+from rblur.models import CommonModelParams, ConvEncoder, XResNet34, convbnrelu, bnrelu
+from rblur.retina_blur2 import RetinaBlurFilter as RBlur2
+import deepgaze_pytorch
 from pathlib import Path
 
 def convert_image_tensor_to_ndarray(img):
@@ -593,9 +593,9 @@ class CustomBackboneDeepGazeIII(BaseFixationPredictor):
                             return param_set
             return param_set
         
-        from adversarialML.biologically_inspired_models.src.ICLR22.noisy_retina_blur import ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18
-        from adversarialML.biologically_inspired_models.src.models import IdentityLayer
-        from adversarialML.biologically_inspired_models.src.retina_preproc import AbstractRetinaFilter, GaussianNoiseLayer
+        from rblur.ICLR22.noisy_retina_blur import ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18
+        from rblur.models import IdentityLayer
+        from rblur.retina_preproc import AbstractRetinaFilter, GaussianNoiseLayer
 
         rblur_in1k_params = ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18().get_model_params()
         set_param2(rblur_in1k_params, IdentityLayer.get_params(), param_type=AbstractRetinaFilter.ModelParams)
@@ -805,7 +805,7 @@ class FixationPredictionNetwork(BaseFixationPredictor):
                 if self.params.arch == 'gala':
                     self.fixation_predictor = GALA(backbone, 1024)
             else:
-                raise ValueError(f'backbone must be a subclass of either torchvision.models.ResNet or adversarialML.biologically_inspired_models.src.models.XResNet34 but got {type(backbone)}')
+                raise ValueError(f'backbone must be a subclass of either torchvision.models.ResNet or rblur.models.XResNet34 but got {type(backbone)}')
         self.pyramid = GaussianPyramid(5)
         
     def preprocess(self, x):

@@ -4,13 +4,13 @@ from argparse import ArgumentParser
 import torch
 import torchvision
 import transformers
-from adversarialML.biologically_inspired_models.src.runners import (
+from rblur.runners import (
     AdversarialAttackBatteryRunner, AdversarialExperimentConfig,
     AdversarialExperimentRunner)
-from adversarialML.biologically_inspired_models.src.tasks import (
+from rblur.tasks import (
     get_cifar10_adv_experiment_params, get_cifar10_params, set_adv_params,
     set_common_training_params, set_SGD_params)
-from adversarialML.biologically_inspired_models.src.utils import \
+from rblur.utils import \
     get_model_checkpoint_paths
 from attrs import define
 from mllib.adversarial.attacks import (AttackParamFactory, SupportedAttacks,
@@ -20,7 +20,7 @@ from mllib.models.base_models import AbstractModel
 from mllib.param import BaseParameters
 from mllib.tasks.base_tasks import AbstractTask
 
-import adversarialML.biologically_inspired_models.src.evaluation_tasks as eval
+import rblur.evaluation_tasks as eval
 from main import get_task_class_from_str
 
 
