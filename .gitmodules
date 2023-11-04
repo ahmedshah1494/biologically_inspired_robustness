@@ -4,3 +4,6 @@
 [submodule "DeepGaze"]
 	path = DeepGaze
 	url = https://github.com/matthias-k/DeepGaze.git
+[submodule "retinawarp"]
+	path = retinawarp
+	url = https://github.com/dicarlolab/retinawarp.git
