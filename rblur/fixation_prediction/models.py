@@ -593,7 +593,7 @@ class CustomBackboneDeepGazeIII(BaseFixationPredictor):
                             return param_set
             return param_set
         
-        from rblur.ICLR22.noisy_retina_blur import ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18
+        from neurips23.noisy_retina_blur import ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18
         from rblur.models import IdentityLayer
         from rblur.retina_preproc import AbstractRetinaFilter, GaussianNoiseLayer
 

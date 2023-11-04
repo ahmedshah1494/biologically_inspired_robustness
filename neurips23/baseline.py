@@ -1,5 +1,5 @@
 import torchvision
-from rblur.mlp_mixer_models import NormalizationLayer
+from rblur.models import NormalizationLayer
 from rblur.models import (
     CommonModelParams, GeneralClassifier, SequentialLayers, XResNet34, XResNet18, XResNet50, WideResnet,
     ActivationLayer, BatchNorm2DLayer, FovTexVGG)

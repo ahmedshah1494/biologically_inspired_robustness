@@ -1,4 +1,4 @@
-from rblur.mlp_mixer_models import NormalizationLayer
+from rblur.models import NormalizationLayer
 from rblur.models import PretrainedTimmModel
 from rblur.task_utils import *
 from mllib.tasks.base_tasks import AbstractTask
