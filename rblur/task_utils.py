@@ -17,9 +17,10 @@ from torch.cuda import device_count as gpu_count
 hostname = gethostname()
 if 'bridges2' in hostname:
     logdir_root = '/ocean/projects/cis220031p/mshah1'
-else:
+elif 'workhorse' in hostname:
     logdir_root = '/share/workhorse3/mshah1'
-
+else:
+    logdir_root = '/home/mshah1'
 LOGDIR = f'{logdir_root}/biologically_inspired_models/bioRF_logs/'
 N_GPUS = gpu_count()
 
