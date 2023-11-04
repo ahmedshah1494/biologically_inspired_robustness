@@ -44,7 +44,7 @@ class Cifar10NoisyRetinaBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22(Abstr
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std, max_input_size=self.input_size)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
-                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform')
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform', min_bincount=2)
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         resnet_p = WideResnet.ModelParams(WideResnet, CommonModelParams(self.input_size, 10), num_classes=10, 
                                             normalization_layer_params=NormalizationLayer.get_params(), depth=self.depth, 
@@ -86,7 +86,7 @@ class Cifar10NoisyRetinaBlurCyclicLRAutoAugmentWideResNet4x22(AbstractTask):
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
-                                                rod_std=0.09, max_rod_density=0.12)
+                                                rod_std=0.09, max_rod_density=0.12, min_bincount=2)
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         resnet_p = WideResnet.ModelParams(WideResnet, CommonModelParams(self.input_size, 10), num_classes=10, 
                                             normalization_layer_params=NormalizationLayer.get_params(), depth=self.depth, 
@@ -112,7 +112,7 @@ class Cifar10NoisyRetinaBlurOnlyColorWRandomScalesCyclicLRAutoAugmentWideResNet4
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
                                                 rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
-                                                only_color=True)
+                                                only_color=True, min_bincount=2)
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         resnet_p = WideResnet.ModelParams(WideResnet, CommonModelParams(self.input_size, 10), num_classes=10, 
                                             normalization_layer_params=NormalizationLayer.get_params(), depth=self.depth, 
@@ -125,7 +125,7 @@ class Cifar10NoisyRetinaBlurNoBlurWRandomScalesCyclicLRAutoAugmentWideResNet4x22
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
                                                 rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform',
-                                                no_blur=True)
+                                                no_blur=True, min_bincount=2)
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         resnet_p = WideResnet.ModelParams(WideResnet, CommonModelParams(self.input_size, 10), num_classes=10, 
                                             normalization_layer_params=NormalizationLayer.get_params(), depth=self.depth, 
@@ -154,7 +154,7 @@ class Cifar10NoisyRetinaBlurS1250WRandomScalesCyclicLRAutoAugmentWideResNet4x22(
     def get_model_params(self):
         rnoise_p = GaussianNoiseLayer.ModelParams(GaussianNoiseLayer, std=self.noise_std)
         rblur_p = RetinaBlurFilter.ModelParams(RetinaBlurFilter, self.input_size, batch_size=32, cone_std=0.12, 
-                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform')
+                                                rod_std=0.09, max_rod_density=0.12, view_scale='random_uniform', min_bincount=2)
         rp = SequentialLayers.ModelParams(SequentialLayers, [rnoise_p, rblur_p], CommonModelParams(self.input_size, activation=nn.Identity))
         resnet_p = WideResnet.ModelParams(WideResnet, CommonModelParams(self.input_size, 10), num_classes=10, 
                                             normalization_layer_params=NormalizationLayer.get_params(), depth=self.depth, 
