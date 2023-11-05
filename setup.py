@@ -15,5 +15,10 @@ setup(
         'einops==0.4.1',
         'fastai==2.7.9',
         'transformers==4.21.1',
+        'imageio==2.21.2',
+        'Cython==3.0.5',
+        'pysaliency==0.2.21',
+        'lmdb==1.3.0',
+        'IPython==8.4.0',
     ],
 )
