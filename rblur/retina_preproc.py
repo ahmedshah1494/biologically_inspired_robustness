@@ -876,7 +876,7 @@ class VOneBlock(AbstractModel):
         kwargs_to_exclude = set(['cls', 'add_noise_during_inference', 'add_deterministic_noise_during_inference', 'dropout_p', 'color_mode'])
         kwargs = params.asdict(filter=lambda a,v: a.name not in kwargs_to_exclude)
         print(kwargs)
-        from vonenet.vonenet.vonenet import VOneNet
+        from vonenet.vonenet import VOneNet
         voneblock = VOneNet(**kwargs)
         num_vone_channels = params.simple_channels+params.complex_channels
         if params.color_mode == 'exhaustive_single_opponent':
