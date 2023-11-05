@@ -6,20 +6,17 @@ import numpy as np
 
 import torchvision
 from rblur.mlp_mixer_models import (
-    ConsistentActivationMixerBlock, ConsistentActivationMixerMLP,
-    FirstNExtractionClassifier, LinearLayer, MixerBlock, MixerMLP, MLPMixer,
-    NormalizationLayer, UnfoldPatchExtractor)
+    LinearLayer, MixerBlock, MixerMLP, MLPMixer,
+    UnfoldPatchExtractor)
 from rblur.models import (
-    ConsistentActivationLayer, ConvEncoder, GeneralClassifier, IdentityLayer,
-    ScanningConsistentActivationLayer, SequentialLayers, XResNet34, XResNet18, SupervisedContrastiveTrainingWrapper)
+    ConvEncoder,SequentialLayers, NormalizationLayer)
 from rblur.retina_preproc import (
     AbstractRetinaFilter, RetinaBlurFilter, RetinaNonUniformPatchEmbedding,
     RetinaSampleFilter)
 from rblur.supconloss import \
     TwoCropTransform
 from rblur.trainers import (
-    ActivityOptimizationSchedule, AdversarialParams, AdversarialTrainer,
-    ConsistentActivationModelAdversarialTrainer,
+    AdversarialParams, AdversarialTrainer,
     MixedPrecisionAdversarialTrainer)
 from rblur.mlp_mixer_tasks import get_dataset_params
 from mllib.adversarial.attacks import (AttackParamFactory, SupportedAttacks,
