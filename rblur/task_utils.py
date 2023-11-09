@@ -13,15 +13,9 @@ from mllib.optimizers.configs import (AbstractOptimizerConfig, AbstractScheduler
 from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.adversarial.attacks import TorchAttackAPGDInfParams, TorchAttackPGDInfParams
 from torch.cuda import device_count as gpu_count
-
-hostname = gethostname()
-if 'bridges2' in hostname:
-    logdir_root = '/ocean/projects/cis220031p/mshah1'
-elif hostname.endswith('.local'):
-    logdir_root = '/share/workhorse3/mshah1'
-else:
-    logdir_root = '/home/mshah1'
-LOGDIR = f'{logdir_root}/biologically_inspired_models/bioRF_logs/'
+import os
+RBLUR_ROOT = os.environ['RBLUR_ROOT']
+LOGDIR = f'{RBLUR_ROOT}/rblur/logs/'
 N_GPUS = gpu_count()
 
 def get_cifar10_params(num_train=25000, num_test=1000):
