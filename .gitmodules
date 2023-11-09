@@ -10,3 +10,4 @@
 [submodule "mllib"]
 	path = mllib
 	url = https://github.com/ahmedshah1494/mllib.git
+	branch = release-v1.0
