@@ -20,6 +20,7 @@ setup(
         'pysaliency==0.2.21',
         'lmdb==1.3.0',
         'IPython==8.4.0',
-        'pysaliency==0.2.21'
+        'pysaliency==0.2.21',
+        'Cython==3.0.5'
     ],
 )
