@@ -609,7 +609,7 @@ class CustomBackboneDeepGazeIII(BaseFixationPredictor):
                                                             '1.classifier.resnet.7.0',
                                                             '1.classifier.resnet.7.1',
                                                         ],
-                                        'ckp_path':f'{os.environ['RBLUR_ROOT']}/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/pretraining/final.pth',
+                                        'ckp_path':f'{os.environ["RBLUR_ROOT"]}/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/pretraining/final.pth',
                                         # 'ckp_path':'/ocean/projects/cis220031p/mshah1/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/pretraining/final.pth',
                                         'min_img_dim':224
                                     },
@@ -620,7 +620,7 @@ class CustomBackboneDeepGazeIII(BaseFixationPredictor):
                                                             '1.classifier.resnet.7.0',
                                                             '1.classifier.resnet.7.1',
                                                         ],
-                                        'ckp_path':f'{os.environ['RBLUR_ROOT']}/train_deepgaze3/ImagenetRetinaWarpCyclicLRRandAugmentXResNet2x18/pretraining/step-0051.pth',
+                                        'ckp_path':f'{os.environ["RBLUR_ROOT"]}/train_deepgaze3/ImagenetRetinaWarpCyclicLRRandAugmentXResNet2x18/pretraining/step-0051.pth',
                                         'min_img_dim':224
                                     },
             'rblur-6.1-7.0-7.1-clickme-in1k':{
@@ -630,7 +630,7 @@ class CustomBackboneDeepGazeIII(BaseFixationPredictor):
                                                             '1.classifier.resnet.7.0',
                                                             '1.classifier.resnet.7.1',
                                                         ],
-                                        'ckp_path':f'{os.environ['RBLUR_ROOT']}/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/clickme/step-0002.pth',
+                                        'ckp_path':f'{os.environ["RBLUR_ROOT"]}/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/clickme/step-0002.pth',
                                         'min_img_dim':224
                                     },
             'rblur-4.1-6.1-7.0-7.1-in1k':{
@@ -641,7 +641,7 @@ class CustomBackboneDeepGazeIII(BaseFixationPredictor):
                                                             '1.classifier.resnet.7.0',
                                                             '1.classifier.resnet.7.1',
                                                         ],
-                                        'ckp_path':f'{os.environ['RBLUR_ROOT']}/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/layers_4_6_7/pretraining/final.pth',
+                                        'ckp_path':f'{os.environ["RBLUR_ROOT"]}/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/layers_4_6_7/pretraining/final.pth',
                                         'min_img_dim':224
                                     },
             'rblur-3-4.1-5.1-7.0-7.1-in1k':{
@@ -653,7 +653,7 @@ class CustomBackboneDeepGazeIII(BaseFixationPredictor):
                                                             '1.classifier.resnet.7.0',
                                                             '1.classifier.resnet.7.1',
                                                         ],
-                                        'ckp_path':f'{os.environ['RBLUR_ROOT']}/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/layers_3_4_5_7/pretraining/final.pth',
+                                        'ckp_path':f'{os.environ["RBLUR_ROOT"]}/train_deepgaze3/ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18/layers_3_4_5_7/pretraining/final.pth',
                                         'min_img_dim':224
                                     },
         }
