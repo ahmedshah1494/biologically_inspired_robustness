@@ -14,8 +14,8 @@ from mllib.runners.configs import BaseExperimentConfig, TrainingParams
 from mllib.adversarial.attacks import TorchAttackAPGDInfParams, TorchAttackPGDInfParams
 from torch.cuda import device_count as gpu_count
 import os
-RBLUR_ROOT = os.environ['RBLUR_ROOT']
-LOGDIR = f'{RBLUR_ROOT}/rblur/logs/'
+logdir_root = os.environ['RBLUR_ROOT']
+LOGDIR = f'{logdir_root}/rblur/logs/'
 N_GPUS = gpu_count()
 
 def get_cifar10_params(num_train=25000, num_test=1000):
