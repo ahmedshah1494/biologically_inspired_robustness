@@ -75,51 +75,112 @@ attacks =  {
 if __name__ == '__main__':
     parser = ArgumentParser()
     # Model args
-    parser.add_argument('--task', type=str, required=True)
-    parser.add_argument('--ckp', type=str)
+    parser.add_argument('--task', type=str, required=True,
+                        help='Task class (in module notation) to load.')
+    parser.add_argument('--ckp', type=str,
+                        help='Path to checkpoint to load model from.')
     # Data settings
-    parser.add_argument('--num_test', type=int, default=2000)
-    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--num_test', type=int, default=2000,
+                        help='Number of test samples to use.')
+    parser.add_argument('--batch_size', type=int, default=256,
+                        help='Batch size.')
 
-    parser.add_argument('--output_to_task_logdir', action='store_true')
-    parser.add_argument('--num_trainings', type=int, default=1)
-    parser.add_argument('--eval_only', action='store_true')
-    parser.add_argument('--prune_and_test', action='store_true')
+    parser.add_argument('--output_to_task_logdir', action='store_true',
+                        help='Output checkpoints to task.get_experiment_params().logdir instead of ckp dir.')
+    parser.add_argument('--num_trainings', type=int, default=1,
+                        help='Number of trainings to run.')
+    parser.add_argument('--eval_only', action='store_true',
+                        help='Only run evaluation.')
+    parser.add_argument('--prune_and_test', action='store_true',
+                        help='''
+                        Runs unstructured pruning based on L1 norm of
+                        activations and then tests the model.
+                        THIS FEATURES HAS NOT BEEN EXTENSIVELY TESTED''')
     # Adversarial attack settings
-    parser.add_argument('--run_adv_attack_battery', action='store_true')
-    parser.add_argument('--attacks', nargs='+', type=str, choices=attacks.keys(), default=['APGD'])
-    parser.add_argument('--eps_list', nargs='+', type=float, default=[0.])
+    parser.add_argument('--run_adv_attack_battery', action='store_true',
+                        help='''
+                        Run adversarial attacks specified by `--args` with perturbation sizes specified in `--eps_list`.
+                        Each attack is run with all perturbation sizes for each test sample.
+                        ''')
+    parser.add_argument('--attacks', nargs='+', type=str, choices=attacks.keys(), default=['APGD'],
+                        help='Adversarial attacks to run.')
+    parser.add_argument('--eps_list', nargs='+', type=float, default=[0.],
+                        help='List of perturbation sizes to run attacks with. The size metric is defined by the attack.')
     # Randomized smoothing settings
-    parser.add_argument('--run_randomized_smoothing_eval', action='store_true')
-    parser.add_argument('--rs_start_batch_idx', type=int, default=0)
-    parser.add_argument('--rs_end_batch_idx', type=int)
+    parser.add_argument('--run_randomized_smoothing_eval', action='store_true',
+                        help='''
+                        Run randomized smoothing evaluation with sigmas (standard deviations) specified in `--eps_list`.
+                        ''')
+    parser.add_argument('--rs_start_batch_idx', type=int, default=0,
+                        help='Batch index to start randomized smoothing evaluation at. Skips all previous batches.')
+    parser.add_argument('--rs_end_batch_idx', type=int,
+                        help='Batch index to end randomized smoothing evaluation at. Skips all following batches.')
     # Fixation Settings
-    parser.add_argument('--center_fixation', action='store_true')
-    parser.add_argument('--five_fixations', action='store_true')
-    parser.add_argument('--bb_fixations', action='store_true')
-    parser.add_argument('--fixate_on_max_loc', action='store_true')
-    parser.add_argument('--view_scale', type=int, default=None)
-    parser.add_argument('--hscan_fixations', action='store_true')
+    parser.add_argument('--center_fixation', action='store_true',
+                        help='Fixate on the center of the image.')
+    parser.add_argument('--five_fixations', action='store_true',
+                        help='Fixate on the center of the image and the four corners.')
+    parser.add_argument('--bb_fixations', action='store_true',
+                        help='''
+                        fixate in the bounding box of the object.
+                        Elements of the dataset must be (image, label, bbox) triplets''')
+    parser.add_argument('--fixate_on_max_loc', action='store_true',
+                        help='''Fixate on the location of the maximum logit in a fixation heatmap.
+                        Elements of the dataset must be (image, label, fixation heatmap) triplets''')
+    parser.add_argument('--view_scale', type=int, default=None,
+                        help='Determines the size of the foveated region. 0 is the smallest.')
+    parser.add_argument('--hscan_fixations', action='store_true', 
+                        )
     # Fixation model Settings
-    parser.add_argument('--add_fixation_predictor', action='store_true')
-    parser.add_argument('--fixation_prediction_model', type=str, default='deepgazeII')
-    parser.add_argument('--retina_after_fixation', action='store_true')
-    parser.add_argument('--use_precomputed_fixations', action='store_true')
-    parser.add_argument('--precompute_fixation_map', action='store_true')
-    parser.add_argument('--use_clickme_data', action='store_true')
-    parser.add_argument('--num_fixations', type=int, default=1)
-    parser.add_argument('--many_fixations', action='store_true')
+    parser.add_argument('--add_fixation_predictor', action='store_true',
+                        help='Add a fixation predictor to the model.')
+    parser.add_argument('--fixation_prediction_model', type=str, default='deepgazeII',
+                        help='''Fixation prediction model to use. One of deepgazeII, deepgazeIII or one of the keys 
+                        of `cfgdict` in `rblur.fixation_prediction.models.CustomBackboneDeepGazeIII.get_pretrained_model_params`''')
+    parser.add_argument('--retina_after_fixation', action='store_true',
+                        help='''Run the retina after the fixation predictor.This would mean that the fixations are computed
+                                on the original image image.''')
+    parser.add_argument('--use_precomputed_fixations', action='store_true',
+                        help='''Use precomputed fixation maps instead of computing them on the fly.
+                        The dataset must be of the form (image, label, fixation map) triplets. Currently works
+                        with mllib.datasets.dataset_factory.{CLICKME, ECOSET10wFIXATIONMAPS_FOLDER, ECOSET100wFIXATIONMAPS_FOLDER}''')
+    parser.add_argument('--precompute_fixation_map', action='store_true',
+                        help=f'''
+                        Precompute fixation map before applying adversarial attacks. The precomputed fixation map is
+                        concatenated with the image in the channel dimension. This arg should be set if using any of the
+                        following attacks: {[k for k in attacks.keys() if 'PcFmap' in k]}
+                        ''')
+    parser.add_argument('--use_clickme_data', action='store_true',
+                        help='''
+                        Use the clickme dataset for evaluation. Use this option only with models trained on imagenet.
+                        ''')
+    parser.add_argument('--num_fixations', type=int, default=1,
+                        help='Number of fixations to use for each image. Only use if fixation predictor is used.')
     
-    parser.add_argument('--disable_retina', action='store_true')
-    parser.add_argument('--straight_through_retina', action='store_true')
+    parser.add_argument('--disable_retina', action='store_true',
+                        help='''RBlur will not be used during evaluation''')
+    parser.add_argument('--straight_through_retina', action='store_true',
+                        help='''The gradients are passed straight through RBlur without modification.''')
     parser.add_argument('--disable_reconstruction', action='store_true')
     parser.add_argument('--use_residual_img', action='store_true')
 
-    parser.add_argument('--use_common_corruption_testset', action='store_true')
+    parser.add_argument('--use_common_corruption_testset', action='store_true',
+                        help='''
+                            Use version of the dataset corrupted by common (Imagenet-C) style corruptions.
+                        ''')
 
-    parser.add_argument('--add_fixed_noise_patch', action='store_true')
-    parser.add_argument('--add_random_noise', action='store_true')
-    parser.add_argument('--multi_randaugment', action='store_true')
+    parser.add_argument('--add_fixed_noise_patch', action='store_true',
+                        help='''
+                        Determinizes the Gaussian noise layer.
+                        ''')
+    parser.add_argument('--add_random_noise', action='store_true',
+                        help='''
+                        Randomizes the gaussian noise layer.
+                        ''')
+    parser.add_argument('--multi_randaugment', action='store_true',
+                        help='''
+                        Applies random augmentations to the image 5 times.
+                        ''')
 
     parser.add_argument('--use_lightning_lite', action='store_true')
     parser.add_argument('--use_bf16_precision', action='store_true')
