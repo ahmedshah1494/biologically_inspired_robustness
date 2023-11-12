@@ -111,7 +111,7 @@ The task files are located in `rblur-neurips-2023/adversarialML/biologically_ins
 - `randomized_smoothing.py` contains tasks for GNoise models.
 - `vonenets.py` contains tasks for models with VOneBlocks.
 
-E.g. `python main.py --task neurips23.noisy_retina_blur.Ecoset10NoisyRetinaBlurS2500WRandomScalesCyclicLR1e_1RandAugmentXResNet2x18 --use_f16_precision`
+E.g. `python main.py --task neurips23.noisy_retina_blur.ImagenetNoisyRetinaBlurWRandomScalesCyclicLRRandAugmentXResNet2x18 --use_f16_precision`
 
 ### Evaluation
 Example evaluation commands:
