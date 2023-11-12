@@ -222,7 +222,7 @@ class Ecoset10RetinaBlurCyclicLRRandAugmentXResNet2x18(AbstractTask):
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -261,7 +261,7 @@ class Ecoset10RetinaBlurCyclicLR1e_1RandAugmentXResNet2x18(Ecoset10RetinaBlurCyc
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -300,7 +300,7 @@ class Ecoset10RetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Abstract
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -339,7 +339,7 @@ class Ecoset10RetinaBlurOnlyColorWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -379,7 +379,7 @@ class Ecoset10RetinaBlurNoBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(Ab
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -419,7 +419,7 @@ class Ecoset10CyclicLR1e_1RandAugmentXResNet2x18TransferEcoset100RetinaBlur(Ecos
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -464,7 +464,7 @@ class Ecoset10RetinaBlurCyclicLR1e_1RandAugmentXResNet2x18TransferEcoset100Gauss
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),

@@ -68,7 +68,7 @@ class Ecoset10AdvTrainNoisyRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet
     widen_factor = 2
     noise_std = 0.125
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -188,7 +188,7 @@ class Ecoset10AdvTrainRetinaBlurWRandomScalesCyclicLR1e_1RandAugmentXResNet2x18(
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),

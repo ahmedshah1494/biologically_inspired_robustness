@@ -63,7 +63,7 @@ class Ecoset10RetinaWarpCyclicLRRandAugmentXResNet2x18(AbstractTask):
     input_size = [3, imgs_size, imgs_size]
     widen_factor = 2
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -101,7 +101,7 @@ class Ecoset10RetinaWarpCyclicRandAugmentMLPMixerS16(AbstractTask):
     input_size = [3, imgs_size, imgs_size]
     noise_std = 0.25
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
@@ -136,7 +136,7 @@ class Ecoset10RetinaWarpCyclicRandAugmentViT16(AbstractTask):
     input_size = [3, imgs_size, imgs_size]
     noise_std = 0.25
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),

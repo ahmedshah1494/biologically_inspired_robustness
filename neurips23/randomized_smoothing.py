@@ -66,7 +66,7 @@ class Ecoset10GaussianNoiseCyclicLRRandAugmentXResNet2x18(AbstractTask):
     widen_factor = 2
     noise_std = 0.125
     def get_dataset_params(self) :
-        p = get_ecoset10_params(train_transforms=[
+        p = get_ecoset10folder_params(train_transforms=[
                 torchvision.transforms.Resize(self.imgs_size),
                 torchvision.transforms.RandomCrop(self.imgs_size),
                 torchvision.transforms.RandomHorizontalFlip(),
